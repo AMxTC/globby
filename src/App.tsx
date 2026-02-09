@@ -98,7 +98,7 @@ function VolumeRenderer() {
         />
       </ScreenQuad>
       <mesh>
-        <boxGeometry args={[1, 1, 1]} />
+        <boxGeometry args={[BOUNDS * 2, BOUNDS * 2, BOUNDS * 2]} />
         <meshBasicMaterial wireframe depthTest={false} color={"red"} />
       </mesh>
     </>
