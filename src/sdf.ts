@@ -40,3 +40,54 @@ export function bakeVoxels(
   }
   return data;
 }
+
+export interface MipLevel {
+  data: Float32Array;
+  resolution: number;
+}
+
+/**
+ * Build a mipmap chain of 3D distance fields.
+ * Each level downsamples by 4×4×4 and stores min(|sdf|) of each block.
+ * Returns array of mip levels (excluding level 0, which is the input).
+ * e.g. 128→32→8→2, or 256→64→16→4, or 64→16→4
+ */
+export function buildMipChain(
+  data: Float32Array,
+  resolution: number,
+): MipLevel[] {
+  const mips: MipLevel[] = [];
+  let src = data;
+  let srcRes = resolution;
+
+  while (srcRes >= 8) {
+    const dstRes = srcRes / 4;
+    const dst = new Float32Array(dstRes * dstRes * dstRes);
+
+    for (let dz = 0; dz < dstRes; dz++) {
+      for (let dy = 0; dy < dstRes; dy++) {
+        for (let dx = 0; dx < dstRes; dx++) {
+          let minAbs = Infinity;
+          for (let lz = 0; lz < 4; lz++) {
+            for (let ly = 0; ly < 4; ly++) {
+              for (let lx = 0; lx < 4; lx++) {
+                const sx = dx * 4 + lx;
+                const sy = dy * 4 + ly;
+                const sz = dz * 4 + lz;
+                const val = Math.abs(src[sz * srcRes * srcRes + sy * srcRes + sx]);
+                if (val < minAbs) minAbs = val;
+              }
+            }
+          }
+          dst[dz * dstRes * dstRes + dy * dstRes + dx] = minAbs;
+        }
+      }
+    }
+
+    mips.push({ data: dst, resolution: dstRes });
+    src = dst;
+    srcRes = dstRes;
+  }
+
+  return mips;
+}

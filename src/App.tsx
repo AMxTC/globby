@@ -17,31 +17,80 @@ import {
   PerspectiveCamera as ThreePerspectiveCamera,
   MOUSE,
 } from "three";
-import { sdSphere, sdBox, opSmoothUnion, bakeVoxels } from "./sdf";
+import {
+  sdSphere,
+  sdBox,
+  opSmoothUnion,
+  bakeVoxels,
+  buildMipChain,
+  type MipLevel,
+} from "./sdf";
 import { vertexShader, fragmentShader } from "./shaders";
 
 const RESOLUTION = 128;
 const BOUNDS = 2.0;
 
-function createVolumeTexture(): Data3DTexture {
+function makeMipTex(mipData: Float32Array, res: number): Data3DTexture {
+  const tex = new Data3DTexture(mipData, res, res, res);
+  tex.format = RedFormat;
+  tex.type = FloatType;
+  tex.minFilter = LinearFilter;
+  tex.magFilter = LinearFilter;
+  tex.unpackAlignment = 1;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+// 1×1×1 dummy texture (large distance so it never triggers refinement)
+function makeDummyMipTex(): Data3DTexture {
+  return makeMipTex(new Float32Array([1e10]), 1);
+}
+
+interface VolumeTextures {
+  volume: Data3DTexture;
+  mips: Data3DTexture[]; // up to 3 mip textures
+  mipResolutions: number[]; // resolution of each mip (float for the shader)
+  mipCount: number;
+}
+
+function createVolumeTextures(): VolumeTextures {
   const data = bakeVoxels(
     (p) => {
       const sphere = sdSphere([p[0] - 0.5, p[1], p[2]], 0.8);
       const box = sdBox(p, [0.5, 0.5, 0.5]);
-      return opSmoothUnion(sphere, box, 0.1);
+      const displacment =
+        Math.sin(p[0] * 30) + Math.sin(p[1] * 30) + Math.sin(p[2] * 30);
+      return opSmoothUnion(sphere, box, 0.1) + displacment * 0.01;
     },
     RESOLUTION,
     BOUNDS,
   );
 
-  const texture = new Data3DTexture(data, RESOLUTION, RESOLUTION, RESOLUTION);
-  texture.format = RedFormat;
-  texture.type = FloatType;
-  texture.minFilter = LinearFilter;
-  texture.magFilter = LinearFilter;
-  texture.unpackAlignment = 1;
-  texture.needsUpdate = true;
-  return texture;
+  const volume = new Data3DTexture(data, RESOLUTION, RESOLUTION, RESOLUTION);
+  volume.format = RedFormat;
+  volume.type = FloatType;
+  volume.minFilter = LinearFilter;
+  volume.magFilter = LinearFilter;
+  volume.unpackAlignment = 1;
+  volume.needsUpdate = true;
+
+  const mipLevels = buildMipChain(data, RESOLUTION);
+  const mipCount = Math.min(mipLevels.length, 3);
+
+  // Always provide exactly 3 sampler slots; pad with dummies
+  const mips: Data3DTexture[] = [];
+  const mipResolutions: number[] = [];
+  for (let i = 0; i < 3; i++) {
+    if (i < mipLevels.length) {
+      mips.push(makeMipTex(mipLevels[i].data, mipLevels[i].resolution));
+      mipResolutions.push(mipLevels[i].resolution);
+    } else {
+      mips.push(makeDummyMipTex());
+      mipResolutions.push(1.0);
+    }
+  }
+
+  return { volume, mips, mipResolutions, mipCount };
 }
 
 function VolumeRenderer() {
@@ -49,19 +98,25 @@ function VolumeRenderer() {
   const shaderRef = useRef<ShaderMaterial>(null!);
   const cameraRef = useRef<ThreePerspectiveCamera>(null!);
 
-  const volumeTexture = useMemo(() => createVolumeTexture(), []);
+  const textures = useMemo(() => createVolumeTextures(), []);
 
   const uniforms = useMemo(
     () => ({
       u_resolution: { value: new Vector2(size.width, size.height) },
-      u_volume: { value: volumeTexture },
+      u_volume: { value: textures.volume },
+      u_mip1: { value: textures.mips[0] },
+      u_mip2: { value: textures.mips[1] },
+      u_mip3: { value: textures.mips[2] },
+      u_mip_res: { value: new Float32Array(textures.mipResolutions) },
+      u_mip_count: { value: textures.mipCount },
+      u_base_resolution: { value: RESOLUTION },
       u_camera_matrix: { value: cameraRef.current?.matrixWorld },
       u_camera_projection_matrix_inverse: {
         value: cameraRef.current?.projectionMatrixInverse,
       },
       u_bounds: { value: BOUNDS },
     }),
-    [volumeTexture, size.width, size.height],
+    [textures, size.width, size.height],
   );
 
   useFrame((state) => {

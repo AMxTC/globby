@@ -10,6 +10,12 @@ precision highp sampler3D;
 
 uniform vec2 u_resolution;
 uniform sampler3D u_volume;
+uniform sampler3D u_mip1;
+uniform sampler3D u_mip2;
+uniform sampler3D u_mip3;
+uniform float u_mip_res[3];  // resolution of each mip level
+uniform int u_mip_count;     // number of valid mip levels (1-3)
+uniform float u_base_resolution;
 uniform mat4 u_camera_matrix;
 uniform mat4 u_camera_projection_matrix_inverse;
 uniform float u_bounds;
@@ -33,15 +39,30 @@ vec3 worldToUVW(vec3 p) {
   return (p + u_bounds) / (2.0 * u_bounds);
 }
 
-// Sample the SDF volume
+// Sample the SDF volume at level 0 (signed)
 float sampleSDF(vec3 p) {
   vec3 uvw = worldToUVW(p);
   return texture(u_volume, uvw).r;
 }
 
+// Sample the min-abs-distance mip hierarchy
+// level: 1 = 32^3, 2 = 8^3, 3 = 2^3
+float sampleMip(vec3 p, int level) {
+  vec3 uvw = worldToUVW(p);
+  if (level == 1) return texture(u_mip1, uvw).r;
+  if (level == 2) return texture(u_mip2, uvw).r;
+  return texture(u_mip3, uvw).r;
+}
+
+// Cell size for a given mip level (0 = base, 1..3 = mips)
+float cellSizeForLevel(int level) {
+  if (level == 0) return u_bounds * 2.0 / u_base_resolution;
+  return u_bounds * 2.0 / u_mip_res[level - 1];
+}
+
 // Normal via central differences
 vec3 calcNormal(vec3 p) {
-  float eps = u_bounds * 2.0 / 128.0; // ~1 voxel
+  float eps = u_bounds * 2.0 / u_base_resolution; // ~1 voxel
   float dx = sampleSDF(p + vec3(eps,0,0)) - sampleSDF(p - vec3(eps,0,0));
   float dy = sampleSDF(p + vec3(0,eps,0)) - sampleSDF(p - vec3(0,eps,0));
   float dz = sampleSDF(p + vec3(0,0,eps)) - sampleSDF(p - vec3(0,0,eps));
@@ -68,49 +89,76 @@ void main() {
 
   float tNear = max(tHit.x, 0.0);
   float tFar = tHit.y;
+  float voxelSize = cellSizeForLevel(0);
 
-  // Raymarch through volume
-  float stepSize = u_bounds * 2.0 / 256.0;
+  // Hierarchical sphere tracing
+  // Start at coarsest mip level and refine down
+  int level = u_mip_count;
   float t = tNear;
-  float prevD = sampleSDF(ro + t * rd);
+
+  float prevD = sampleSDF(ro + tNear * rd);
 
   for (int i = 0; i < 512; i++) {
-    t += stepSize;
     if (t > tFar) break;
 
     vec3 p = ro + t * rd;
-    float d = sampleSDF(p);
 
-    // Zero crossing: sign change
-    if (d < 0.0 && prevD >= 0.0) {
-      // Bisection refinement
-      float tLo = t - stepSize;
-      float tHi = t;
-      for (int j = 0; j < 8; j++) {
-        float tMid = (tLo + tHi) * 0.5;
-        float dMid = sampleSDF(ro + tMid * rd);
-        if (dMid < 0.0) {
-          tHi = tMid;
-        } else {
-          tLo = tMid;
+    if (level > 0) {
+      float d = sampleMip(p, level);
+      float cellSize = cellSizeForLevel(level);
+
+      if (d > cellSize * 0.5) {
+        t += d;
+      } else {
+        level--;
+        if (level == 0) {
+          prevD = sampleSDF(p);
         }
       }
+    } else {
+      // Level 0: fine-grained fixed-step march with zero-crossing detection
+      float stepSize = voxelSize * 0.5;
+      t += stepSize;
+      if (t > tFar) break;
 
-      vec3 hitPos = ro + tLo * rd;
-      vec3 nor = calcNormal(hitPos);
+      p = ro + t * rd;
+      float d = sampleSDF(p);
 
-      // Lighting
-      vec3 lig = normalize(vec3(1.0, 0.8, -0.2));
-      float dif = clamp(dot(nor, lig), 0.0, 1.0);
-      float amb = 0.5 + 0.5 * nor.y;
-      vec3 col = vec3(0.05, 0.1, 0.15) * amb + vec3(1.0, 0.9, 0.8) * dif;
-      col = sqrt(col); // gamma
+      if (d < 0.0 && prevD >= 0.0) {
+        // Bisection refinement
+        float tLo = t - stepSize;
+        float tHi = t;
+        for (int j = 0; j < 8; j++) {
+          float tMid = (tLo + tHi) * 0.5;
+          float dMid = sampleSDF(ro + tMid * rd);
+          if (dMid < 0.0) {
+            tHi = tMid;
+          } else {
+            tLo = tMid;
+          }
+        }
 
-      outColor = vec4(col, 1.0);
-      return;
+        vec3 hitPos = ro + tLo * rd;
+        vec3 nor = calcNormal(hitPos);
+
+        // Lighting
+        vec3 lig = normalize(vec3(1.0, 0.8, -0.2));
+        float dif = clamp(dot(nor, lig), 0.0, 1.0);
+        float amb = 0.5 + 0.5 * nor.y;
+        vec3 col = vec3(0.05, 0.1, 0.15) * amb + vec3(1.0, 0.9, 0.8) * dif;
+        col = sqrt(col); // gamma
+
+        outColor = vec4(col, 1.0);
+        return;
+      }
+
+      // If far from surface at level 0, go back up to mip 1
+      if (d > voxelSize * 4.0 && u_mip_count >= 1) {
+        level = 1;
+      }
+
+      prevD = d;
     }
-
-    prevD = d;
   }
 
   outColor = vec4(bgColor, 1.0);
