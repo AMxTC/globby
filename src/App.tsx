@@ -1,13 +1,14 @@
 import { useRef, useEffect, useCallback } from "react";
 import { Matrix4 } from "three";
 import { useSnapshot } from "valtio";
-import { sceneState, type SDFShape } from "./state/sceneStore";
+import { sceneState, sceneRefs, type SDFShape } from "./state/sceneStore";
 import { GPURenderer, type WireframeBox } from "./gpu/renderer";
 import { CHUNK_WORLD_SIZE } from "./constants";
 import { createOrbitCamera } from "./gpu/orbit";
 import { setupPointer } from "./gpu/pointer";
 import Toolbar from "./components/Toolbar";
 import { themeState } from "./state/themeStore";
+import { setupHotkeys } from "./lib/hotkeys";
 
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -36,6 +37,11 @@ export default function App() {
         camera,
         () => rendererRef.current,
       );
+
+      sceneRefs.camera = camera;
+      sceneRefs.controls = controls;
+
+      const cleanupHotkeys = setupHotkeys();
 
       await renderer.init(canvas!);
 
@@ -210,6 +216,9 @@ export default function App() {
         cancelAnimationFrame(animId);
         window.removeEventListener("resize", onResize);
         cleanupPointer();
+        cleanupHotkeys();
+        sceneRefs.camera = null;
+        sceneRefs.controls = null;
         controls.dispose();
         renderer.destroy();
       };

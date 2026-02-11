@@ -2,10 +2,10 @@ import { Raycaster, Vector2, Vector3, Plane, type PerspectiveCamera } from "thre
 import {
   sceneState, isShapeTool,
   startDrag, updateBase, lockBase,
-  updateHeight, commitHeight, cancelDrag,
+  updateHeight, commitHeight,
   startRadiusDrag, updateRadius, commitRadius,
   selectShape, startGizmoDrag, updateGizmoDrag,
-  commitGizmoDrag, cancelGizmoDrag,
+  commitGizmoDrag,
   type Vec3, type SDFShape,
 } from "../state/sceneStore";
 import type { GPURenderer } from "./renderer";
@@ -453,25 +453,13 @@ export function setupPointer(
     }
   }
 
-  function onKeyDown(e: KeyboardEvent) {
-    if (e.key === "Escape") {
-      if (sceneState.gizmoDrag.active) {
-        cancelGizmoDrag();
-      } else if (sceneState.drag.phase !== "idle") {
-        cancelDrag();
-      }
-    }
-  }
-
   canvas.addEventListener("pointerdown", onPointerDown, true);
   canvas.addEventListener("pointermove", onPointerMove, true);
   canvas.addEventListener("pointerup", onPointerUp, true);
-  window.addEventListener("keydown", onKeyDown);
 
   return () => {
     canvas.removeEventListener("pointerdown", onPointerDown, true);
     canvas.removeEventListener("pointermove", onPointerMove, true);
     canvas.removeEventListener("pointerup", onPointerUp, true);
-    window.removeEventListener("keydown", onKeyDown);
   };
 }

@@ -233,6 +233,17 @@ export function selectShape(id: string | null) {
   sceneState.selectedShapeId = id;
 }
 
+export function deleteSelectedShape() {
+  const id = sceneState.selectedShapeId;
+  if (!id) return;
+  const idx = sceneState.shapes.findIndex((s) => s.id === id);
+  if (idx >= 0) {
+    sceneState.shapes.splice(idx, 1);
+    sceneState.selectedShapeId = null;
+    sceneState.version++;
+  }
+}
+
 export function moveShape(id: string, newPosition: Vec3) {
   const shape = sceneState.shapes.find((s) => s.id === id);
   if (!shape) return;
@@ -273,6 +284,15 @@ function resetGizmoDrag() {
   sceneState.gizmoDrag.active = false;
   sceneState.gizmoDrag.shapeId = "";
 }
+
+// Non-proxied refs for Three.js objects (valtio proxy would break them)
+export const sceneRefs: {
+  camera: import("three").PerspectiveCamera | null;
+  controls: import("three/examples/jsm/controls/OrbitControls.js").OrbitControls | null;
+} = {
+  camera: null,
+  controls: null,
+};
 
 declare global {
   interface Window {

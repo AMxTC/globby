@@ -16,11 +16,18 @@ Replace single large 3D texture with sparse chunk grid to support larger scenes 
 2. Increase atlas slots — more texture memory but handles bigger scenes
 3. Both — balance resolution vs coverage
 
+## hotkeys
+
+hotkeys in one place, like in blobby (/Users/alasdair/Documents/GitHub/blobby/src/lib/hotkeys.ts)
+
+- delete to delete selected shape(s)
+- escape to deselect selected shape(s)
+- shift + left click to multi-select shapes
+- f to focus camera on selected shape(s)
+
 ## Layers + Masks
 
 ## Undo/Redo System
-
-## Click on shapes and move them around (select + transform tools)
 
 ## edit shapes (edit base of recangle, push pull top)
 
