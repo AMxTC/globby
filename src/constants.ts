@@ -1,6 +1,3 @@
-export const RESOLUTION = 256;
-export const BOUNDS = 2.0;
-
 // Sparse chunk system
 export const VOXEL_SIZE = 0.015625;
 export const CHUNK_VOXELS = 32;
