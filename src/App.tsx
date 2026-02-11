@@ -3,14 +3,16 @@ import { Matrix4 } from "three";
 import { useSnapshot } from "valtio";
 import { sceneState, type SDFShape } from "./state/sceneStore";
 import { GPURenderer, type WireframeBox } from "./gpu/renderer";
+import { CHUNK_WORLD_SIZE } from "./constants";
 import { createOrbitCamera } from "./gpu/orbit";
 import { setupPointer } from "./gpu/pointer";
-import { BOUNDS } from "./constants";
 import Toolbar from "./components/Toolbar";
+import { themeState } from "./state/themeStore";
 
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<GPURenderer | null>(null);
+  const debugHudRef = useRef<HTMLPreElement>(null);
   const snap = useSnapshot(sceneState);
 
   // Init WebGPU renderer + camera + controls
@@ -79,13 +81,6 @@ export default function App() {
           1, 0.03, 0.54, 0.8,
         ];
 
-        // Always show bounds box
-        wireframes.push({
-          center: [0, 0, 0],
-          halfSize: [BOUNDS, BOUNDS, BOUNDS],
-          color: wireframeColor,
-        });
-
         // Show drag preview
         const drag = sceneState.drag;
         if (drag.active) {
@@ -102,16 +97,25 @@ export default function App() {
           const shape = sceneState.shapes.find((s) => s.id === selectedId);
           if (shape) {
             const gizmo = sceneState.gizmoDrag;
-            const showPos: [number, number, number] = gizmo.active && gizmo.shapeId === selectedId
-              ? [...gizmo.previewPos] as [number, number, number]
-              : [...shape.position] as [number, number, number];
-            const showSize: [number, number, number] = [...shape.size] as [number, number, number];
+            const showPos: [number, number, number] =
+              gizmo.active && gizmo.shapeId === selectedId
+                ? ([...gizmo.previewPos] as [number, number, number])
+                : ([...shape.position] as [number, number, number]);
+            const showSize: [number, number, number] = [...shape.size] as [
+              number,
+              number,
+              number,
+            ];
 
             // Selection box (white)
             wireframes.push({
               center: showPos,
               halfSize: showSize,
-              color: [1, 1, 1, 0.6],
+              // white if dark mode, black if light mode
+              color:
+                themeState.theme === "dark"
+                  ? [1, 1, 1, 0.6]
+                  : [0.1, 0.1, 0.1, 0.6],
             });
 
             // Gizmo axes: thin elongated boxes
@@ -138,6 +142,53 @@ export default function App() {
               halfSize: [gizmoThick, gizmoThick, gizmoLen / 2],
               color: [0.3, 0.3, 1, 1],
             });
+          }
+        }
+
+        // Debug: world bounds (first so it's never dropped) + chunk boundaries
+        if (sceneState.showDebugChunks) {
+          const bounds = renderer.getDebugWorldBounds();
+          const stats = renderer.getDebugChunkStats();
+          const bSize = [
+            bounds.max[0] - bounds.min[0],
+            bounds.max[1] - bounds.min[1],
+            bounds.max[2] - bounds.min[2],
+          ];
+          const bHalf: [number, number, number] = [
+            bSize[0] / 2,
+            bSize[1] / 2,
+            bSize[2] / 2,
+          ];
+
+          if (bHalf[0] > 0) {
+            wireframes.push({
+              center: [
+                (bounds.min[0] + bounds.max[0]) / 2,
+                (bounds.min[1] + bounds.max[1]) / 2,
+                (bounds.min[2] + bounds.max[2]) / 2,
+              ],
+              halfSize: bHalf,
+              color: [1, 0.8, 0, 0.5],
+            });
+          }
+
+          const half = CHUNK_WORLD_SIZE / 2;
+          for (const origin of renderer.getDebugChunkOrigins()) {
+            wireframes.push({
+              center: [origin[0] + half, origin[1] + half, origin[2] + half],
+              halfSize: [half, half, half],
+              color: [0.3, 0.6, 1, 0.25],
+            });
+          }
+
+          // Update debug HUD
+          const hud = debugHudRef.current;
+          if (hud) {
+            const atLimit = stats.used >= stats.max;
+            hud.textContent =
+              `Chunks: ${stats.used} / ${stats.max}${atLimit ? " (LIMIT)" : ""}\n` +
+              `Bounds: ${bSize[0].toFixed(1)} x ${bSize[1].toFixed(1)} x ${bSize[2].toFixed(1)}`;
+            if (atLimit) hud.style.color = "#ff4444";
           }
         }
 
@@ -191,6 +242,12 @@ export default function App() {
   return (
     <div className="w-screen h-screen">
       <canvas ref={canvasRef} className="w-full h-full block bg-muted" />
+      {snap.showDebugChunks && (
+        <pre
+          ref={debugHudRef}
+          className="fixed top-4 left-4 font-mono text-xs pointer-events-none text-foreground"
+        />
+      )}
       <Toolbar />
     </div>
   );

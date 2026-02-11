@@ -1,5 +1,5 @@
 import { proxy } from "valtio";
-import { BOUNDS, SHAPE_TYPES, type ShapeType } from "../constants";
+import { SHAPE_TYPES, type ShapeType } from "../constants";
 
 export type Vec3 = [number, number, number];
 
@@ -37,6 +37,7 @@ export const sceneState = proxy({
   shapes: [] as SDFShape[],
   activeTool: "select" as "select" | ShapeType,
   selectedShapeId: null as string | null,
+  showDebugChunks: false,
   gizmoDrag: {
     active: false,
     axis: "x" as "x" | "y" | "z",
@@ -49,7 +50,7 @@ export const sceneState = proxy({
     active: false,
     phase: "idle",
     startPoint: [0, 0, 0] as Vec3,
-    baseFloorY: -BOUNDS,
+    baseFloorY: 0,
     baseHalfX: 0,
     baseHalfZ: 0,
     baseMidX: 0,
@@ -76,7 +77,7 @@ export function isShapeTool(tool: string): tool is ShapeType {
   return (SHAPE_TYPES as readonly string[]).includes(tool);
 }
 
-export function startDrag(worldPoint: Vec3, floorY: number = -BOUNDS) {
+export function startDrag(worldPoint: Vec3, floorY: number = 0) {
   sceneState.drag.active = true;
   sceneState.drag.phase = "base";
   sceneState.drag.startPoint = worldPoint;
@@ -85,7 +86,7 @@ export function startDrag(worldPoint: Vec3, floorY: number = -BOUNDS) {
   sceneState.drag.previewSize = [0.01, 0.01, 0.01];
 }
 
-export function startRadiusDrag(center: Vec3, floorY: number = -BOUNDS) {
+export function startRadiusDrag(center: Vec3, floorY: number = 0) {
   sceneState.drag.active = true;
   sceneState.drag.phase = "radius";
   sceneState.drag.startPoint = center;
@@ -220,7 +221,7 @@ function resetDrag() {
   sceneState.drag.active = false;
   sceneState.drag.phase = "idle";
   sceneState.drag.previewSize = [0.01, 0.01, 0.01];
-  sceneState.drag.baseFloorY = -BOUNDS;
+  sceneState.drag.baseFloorY = 0;
   sceneState.drag.baseHalfX = 0;
   sceneState.drag.baseHalfZ = 0;
   sceneState.drag.baseMidX = 0;
@@ -272,3 +273,11 @@ function resetGizmoDrag() {
   sceneState.gizmoDrag.active = false;
   sceneState.gizmoDrag.shapeId = "";
 }
+
+declare global {
+  interface Window {
+    sceneState: typeof sceneState;
+  }
+}
+
+window.sceneState = sceneState;

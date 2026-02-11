@@ -1,17 +1,27 @@
 import type { SDFShape } from "../state/sceneStore";
-import { RESOLUTION, BOUNDS, SHAPE_TYPE_GPU } from "../constants";
+import {
+  SHAPE_TYPE_GPU,
+  VOXEL_SIZE,
+  CHUNK_SLOT_SIZE,
+  CHUNK_WORLD_SIZE,
+  CHUNK_WORKGROUPS,
+  ATLAS_SLOTS,
+  CHUNK_MAP_SIZE,
+} from "../constants";
 import type { ShapeType } from "../constants";
+import { ChunkManager } from "./chunkManager";
 import bakeWgsl from "../shaders/bake.wgsl?raw";
-import mipWgsl from "../shaders/mip.wgsl?raw";
+import chunkReduceWgsl from "../shaders/chunkReduce.wgsl?raw";
 import raymarchWgsl from "../shaders/raymarch.wgsl?raw";
 import linesWgsl from "../shaders/lines.wgsl?raw";
 
 const MAX_SHAPES = 64;
+const UNIFORM_SIZE = 240; // aligned to 16
 
 export interface WireframeBox {
   center: [number, number, number];
   halfSize: [number, number, number];
-  color: [number, number, number, number]; // RGBA 0-1
+  color: [number, number, number, number];
 }
 
 // 12 edges of a box = 24 vertices (line-list)
@@ -22,7 +32,6 @@ function buildBoxWireframeVerts(
   const [cx, cy, cz] = center;
   const [hx, hy, hz] = half;
 
-  // 8 corners
   const c = [
     [cx - hx, cy - hy, cz - hz],
     [cx + hx, cy - hy, cz - hz],
@@ -34,32 +43,10 @@ function buildBoxWireframeVerts(
     [cx - hx, cy + hy, cz + hz],
   ];
 
-  // 12 edges as pairs of corner indices
   const edges = [
-    0,
-    1,
-    1,
-    2,
-    2,
-    3,
-    3,
-    0, // bottom face
-    4,
-    5,
-    5,
-    6,
-    6,
-    7,
-    7,
-    4, // top face
-    0,
-    4,
-    1,
-    5,
-    2,
-    6,
-    3,
-    7, // verticals
+    0, 1, 1, 2, 2, 3, 3, 0,
+    4, 5, 5, 6, 6, 7, 7, 4,
+    0, 4, 1, 5, 2, 6, 3, 7,
   ];
 
   const verts = new Float32Array(24 * 3);
@@ -71,41 +58,40 @@ function buildBoxWireframeVerts(
   }
   return verts;
 }
-const MIP_LEVELS = [
-  { src: RESOLUTION, dst: RESOLUTION / 4 }, // 128 → 32
-  { src: RESOLUTION / 4, dst: RESOLUTION / 16 }, // 32 → 8
-  { src: RESOLUTION / 16, dst: RESOLUTION / 64 }, // 8 → 2
-];
 
 export class GPURenderer {
   private device!: GPUDevice;
   private context!: GPUCanvasContext;
   private format!: GPUTextureFormat;
 
+  // Chunk system
+  private chunkManager = new ChunkManager();
+
   // Textures
-  private volumeTexture!: GPUTexture;
-  private mipTextures!: GPUTexture[]; // 32³, 8³, 2³
+  private atlasTexture!: GPUTexture;
+  private chunkMapTexture!: GPUTexture;
+  private chunkDistTexture!: GPUTexture;
 
   // Pipelines
   private bakePipeline!: GPUComputePipeline;
-  private mipPipeline!: GPUComputePipeline;
+  private chunkReducePipeline!: GPUComputePipeline;
   private renderPipeline!: GPURenderPipeline;
 
   // Bind group layouts
   private bakeBindGroupLayout!: GPUBindGroupLayout;
-  private mipBindGroupLayout!: GPUBindGroupLayout;
+  private chunkReduceBindGroupLayout!: GPUBindGroupLayout;
   private renderBindGroupLayout!: GPUBindGroupLayout;
 
   // Buffers
   private bakeParamsBuffer!: GPUBuffer;
   private shapeBuffer!: GPUBuffer;
-  private mipParamsBuffers!: GPUBuffer[];
+  private reduceParamsBuffer!: GPUBuffer;
   private uniformBuffer!: GPUBuffer;
 
   // Sampler
   private linearSampler!: GPUSampler;
 
-  // Bind groups (recreated when textures change)
+  // Bind groups
   private renderBindGroup!: GPUBindGroup;
 
   // World-position render target (for pointer picking)
@@ -167,30 +153,39 @@ export class GPURenderer {
   }
 
   private createTextures(): void {
-    const usage =
-      GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING;
-
-    this.volumeTexture = this.device.createTexture({
-      size: [RESOLUTION, RESOLUTION, RESOLUTION],
+    // Atlas: ATLAS_SLOTS * CHUNK_SLOT_SIZE in each dimension
+    this.atlasTexture = this.device.createTexture({
+      size: [
+        ATLAS_SLOTS[0] * CHUNK_SLOT_SIZE,
+        ATLAS_SLOTS[1] * CHUNK_SLOT_SIZE,
+        ATLAS_SLOTS[2] * CHUNK_SLOT_SIZE,
+      ],
       dimension: "3d",
       format: "r32float",
-      usage,
+      usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
     });
 
-    this.mipTextures = MIP_LEVELS.map((level) =>
-      this.device.createTexture({
-        size: [level.dst, level.dst, level.dst],
-        dimension: "3d",
-        format: "r32float",
-        usage,
-      }),
-    );
+    // Chunk map: 64³ r32sint
+    this.chunkMapTexture = this.device.createTexture({
+      size: [CHUNK_MAP_SIZE, CHUNK_MAP_SIZE, CHUNK_MAP_SIZE],
+      dimension: "3d",
+      format: "r32sint",
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+    });
+
+    // Chunk distance: 64³ r32float
+    this.chunkDistTexture = this.device.createTexture({
+      size: [CHUNK_MAP_SIZE, CHUNK_MAP_SIZE, CHUNK_MAP_SIZE],
+      dimension: "3d",
+      format: "r32float",
+      usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
+    });
   }
 
   private createBuffers(): void {
-    // Bake params: resolution(u32) + shape_count(u32) + bounds(f32) + pad(f32) = 16 bytes
+    // Bake params: 32 bytes per chunk, 256-byte aligned, up to 64 chunks per batch
     this.bakeParamsBuffer = this.device.createBuffer({
-      size: 16,
+      size: 256 * 64,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
 
@@ -200,37 +195,27 @@ export class GPURenderer {
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
     });
 
-    // Mip params: one buffer per mip pass (16 bytes each)
-    this.mipParamsBuffers = MIP_LEVELS.map(() =>
-      this.device.createBuffer({
-        size: 16,
-        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-      }),
-    );
-
-    // Write static mip params
-    for (let i = 0; i < MIP_LEVELS.length; i++) {
-      const data = new Uint32Array([MIP_LEVELS[i].src, 0, 0, 0]);
-      this.device.queue.writeBuffer(this.mipParamsBuffers[i], 0, data);
-    }
-
-    // Render uniforms: 2 mat4 (128) + vec2 + f32 + f32 + vec3 + i32 = 128 + 8 + 4 + 4 + 12 + 4 = 160
-    // Align to 16: round up → 160 is fine
-    this.uniformBuffer = this.device.createBuffer({
-      size: 160,
+    // Reduce params: 32 bytes per chunk, 256-byte aligned, up to 64 chunks per batch
+    this.reduceParamsBuffer = this.device.createBuffer({
+      size: 256 * 64,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
 
-    // Lines vertex buffer: bounds + preview + selection + 3 gizmo axes + drag preview = up to 192 verts
+    // Render uniforms: 240 bytes
+    this.uniformBuffer = this.device.createBuffer({
+      size: UNIFORM_SIZE,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+
+    // Lines vertex buffer (up to 1030 wireframe boxes: 1024 debug chunks + 6 UI)
     this.linesVertexBuffer = this.device.createBuffer({
-      size: 192 * 12,
+      size: 24 * 12 * 1030,
       usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
     });
 
-    // Lines uniform buffer: per-wireframe uniforms at 256-byte stride (for dynamic offsets)
-    // 80 bytes each (mat4 + vec4), aligned to 256; supports up to 8 wireframes
+    // Lines uniform buffer (color groups, 256-byte stride, up to 16 groups)
     this.linesUniformBuffer = this.device.createBuffer({
-      size: 256 * 8,
+      size: 256 * 16,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
   }
@@ -242,7 +227,7 @@ export class GPURenderer {
         {
           binding: 0,
           visibility: GPUShaderStage.COMPUTE,
-          buffer: { type: "uniform" },
+          buffer: { type: "uniform", hasDynamicOffset: true },
         },
         {
           binding: 1,
@@ -271,13 +256,13 @@ export class GPURenderer {
       },
     });
 
-    // === Mip pipeline ===
-    this.mipBindGroupLayout = this.device.createBindGroupLayout({
+    // === Chunk reduce pipeline ===
+    this.chunkReduceBindGroupLayout = this.device.createBindGroupLayout({
       entries: [
         {
           binding: 0,
           visibility: GPUShaderStage.COMPUTE,
-          buffer: { type: "uniform" },
+          buffer: { type: "uniform", hasDynamicOffset: true },
         },
         {
           binding: 1,
@@ -296,12 +281,12 @@ export class GPURenderer {
       ],
     });
 
-    this.mipPipeline = this.device.createComputePipeline({
+    this.chunkReducePipeline = this.device.createComputePipeline({
       layout: this.device.createPipelineLayout({
-        bindGroupLayouts: [this.mipBindGroupLayout],
+        bindGroupLayouts: [this.chunkReduceBindGroupLayout],
       }),
       compute: {
-        module: this.device.createShaderModule({ code: mipWgsl }),
+        module: this.device.createShaderModule({ code: chunkReduceWgsl }),
         entryPoint: "main",
       },
     });
@@ -322,20 +307,15 @@ export class GPURenderer {
         {
           binding: 2,
           visibility: GPUShaderStage.FRAGMENT,
-          texture: { sampleType: "float", viewDimension: "3d" },
+          texture: { sampleType: "sint", viewDimension: "3d" },
         },
         {
           binding: 3,
           visibility: GPUShaderStage.FRAGMENT,
-          texture: { sampleType: "float", viewDimension: "3d" },
+          texture: { sampleType: "unfilterable-float", viewDimension: "3d" },
         },
         {
           binding: 4,
-          visibility: GPUShaderStage.FRAGMENT,
-          texture: { sampleType: "float", viewDimension: "3d" },
-        },
-        {
-          binding: 5,
           visibility: GPUShaderStage.FRAGMENT,
           sampler: { type: "filtering" },
         },
@@ -425,11 +405,10 @@ export class GPURenderer {
       layout: this.renderBindGroupLayout,
       entries: [
         { binding: 0, resource: { buffer: this.uniformBuffer } },
-        { binding: 1, resource: this.volumeTexture.createView() },
-        { binding: 2, resource: this.mipTextures[0].createView() },
-        { binding: 3, resource: this.mipTextures[1].createView() },
-        { binding: 4, resource: this.mipTextures[2].createView() },
-        { binding: 5, resource: this.linearSampler },
+        { binding: 1, resource: this.atlasTexture.createView() },
+        { binding: 2, resource: this.chunkMapTexture.createView() },
+        { binding: 3, resource: this.chunkDistTexture.createView() },
+        { binding: 4, resource: this.linearSampler },
       ],
     });
   }
@@ -442,7 +421,6 @@ export class GPURenderer {
       format: "rgba32float",
       usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
     });
-    // Staging buffer for one pixel: 4 x f32 = 16 bytes, rounded up to 256 for alignment
     this.pickStagingBuffer = this.device.createBuffer({
       size: 256,
       usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
@@ -477,17 +455,21 @@ export class GPURenderer {
   bake(shapes: readonly SDFShape[]): void {
     const shapeCount = Math.min(shapes.length, MAX_SHAPES);
 
-    // Write bake params
-    const params = new ArrayBuffer(16);
-    const paramsU32 = new Uint32Array(params);
-    const paramsF32 = new Float32Array(params);
-    paramsU32[0] = RESOLUTION;
-    paramsU32[1] = shapeCount;
-    paramsF32[2] = BOUNDS;
-    paramsF32[3] = 0; // pad
-    this.device.queue.writeBuffer(this.bakeParamsBuffer, 0, params);
+    // Sync chunk manager with current shapes
+    const { dirtyChunks, chunkMapData } = this.chunkManager.sync(shapes);
 
-    // Write shape data
+    // Upload chunk map
+    this.device.queue.writeTexture(
+      { texture: this.chunkMapTexture },
+      chunkMapData.buffer,
+      {
+        bytesPerRow: CHUNK_MAP_SIZE * 4,
+        rowsPerImage: CHUNK_MAP_SIZE,
+      },
+      [CHUNK_MAP_SIZE, CHUNK_MAP_SIZE, CHUNK_MAP_SIZE],
+    );
+
+    // Write shape data once
     if (shapeCount > 0) {
       const buf = new ArrayBuffer(shapeCount * 32);
       const f32 = new Float32Array(buf);
@@ -502,51 +484,92 @@ export class GPURenderer {
         f32[off + 4] = s.size[0];
         f32[off + 5] = s.size[1];
         f32[off + 6] = s.size[2];
-        f32[off + 7] = 0; // pad
+        f32[off + 7] = 0;
       }
       this.device.queue.writeBuffer(this.shapeBuffer, 0, buf);
     }
 
-    const encoder = this.device.createCommandEncoder();
+    if (dirtyChunks.length === 0) return;
 
-    // Bake pass
-    const bakeBindGroup = this.device.createBindGroup({
-      layout: this.bakeBindGroupLayout,
-      entries: [
-        { binding: 0, resource: { buffer: this.bakeParamsBuffer } },
-        { binding: 1, resource: { buffer: this.shapeBuffer } },
-        { binding: 2, resource: this.volumeTexture.createView() },
-      ],
-    });
+    // Process in batches of 64 (buffer capacity)
+    const BATCH_SIZE = 64;
+    for (let batchStart = 0; batchStart < dirtyChunks.length; batchStart += BATCH_SIZE) {
+      const batchEnd = Math.min(batchStart + BATCH_SIZE, dirtyChunks.length);
+      const batchCount = batchEnd - batchStart;
 
-    const bakePass = encoder.beginComputePass();
-    bakePass.setPipeline(this.bakePipeline);
-    bakePass.setBindGroup(0, bakeBindGroup);
-    const wg = RESOLUTION / 4;
-    bakePass.dispatchWorkgroups(wg, wg, wg);
-    bakePass.end();
+      // Upload all bake + reduce params for this batch upfront (256-byte stride)
+      for (let i = 0; i < batchCount; i++) {
+        const chunk = dirtyChunks[batchStart + i];
+        const origin = ChunkManager.chunkOrigin(chunk.cx, chunk.cy, chunk.cz);
+        const atlasOffset = ChunkManager.atlasSlotToOffset(chunk.slotIndex);
 
-    // Mip passes
-    const mipSources = [this.volumeTexture, ...this.mipTextures];
-    for (let i = 0; i < MIP_LEVELS.length; i++) {
-      const mipBindGroup = this.device.createBindGroup({
-        layout: this.mipBindGroupLayout,
+        const bakeParams = new ArrayBuffer(32);
+        const bpF32 = new Float32Array(bakeParams);
+        const bpU32 = new Uint32Array(bakeParams);
+        bpF32[0] = origin[0];
+        bpF32[1] = origin[1];
+        bpF32[2] = origin[2];
+        bpU32[3] = shapeCount;
+        bpU32[4] = atlasOffset[0];
+        bpU32[5] = atlasOffset[1];
+        bpU32[6] = atlasOffset[2];
+        bpF32[7] = VOXEL_SIZE;
+        this.device.queue.writeBuffer(this.bakeParamsBuffer, i * 256, bakeParams);
+
+        const half = CHUNK_MAP_SIZE / 2;
+        const reduceParams = new ArrayBuffer(32);
+        const rpU32 = new Uint32Array(reduceParams);
+        rpU32[0] = atlasOffset[0];
+        rpU32[1] = atlasOffset[1];
+        rpU32[2] = atlasOffset[2];
+        rpU32[3] = 0;
+        rpU32[4] = chunk.cx + half;
+        rpU32[5] = chunk.cy + half;
+        rpU32[6] = chunk.cz + half;
+        rpU32[7] = 0;
+        this.device.queue.writeBuffer(this.reduceParamsBuffer, i * 256, reduceParams);
+      }
+
+      const encoder = this.device.createCommandEncoder();
+      const atlasView = this.atlasTexture.createView();
+      const chunkDistView = this.chunkDistTexture.createView();
+
+      const bakeBindGroup = this.device.createBindGroup({
+        layout: this.bakeBindGroupLayout,
         entries: [
-          { binding: 0, resource: { buffer: this.mipParamsBuffers[i] } },
-          { binding: 1, resource: mipSources[i].createView() },
-          { binding: 2, resource: this.mipTextures[i].createView() },
+          { binding: 0, resource: { buffer: this.bakeParamsBuffer, size: 32 } },
+          { binding: 1, resource: { buffer: this.shapeBuffer } },
+          { binding: 2, resource: atlasView },
         ],
       });
 
-      const mipPass = encoder.beginComputePass();
-      mipPass.setPipeline(this.mipPipeline);
-      mipPass.setBindGroup(0, mipBindGroup);
-      const mipWg = Math.max(MIP_LEVELS[i].dst / 4, 1);
-      mipPass.dispatchWorkgroups(mipWg, mipWg, mipWg);
-      mipPass.end();
-    }
+      const reduceBindGroup = this.device.createBindGroup({
+        layout: this.chunkReduceBindGroupLayout,
+        entries: [
+          { binding: 0, resource: { buffer: this.reduceParamsBuffer, size: 32 } },
+          { binding: 1, resource: atlasView },
+          { binding: 2, resource: chunkDistView },
+        ],
+      });
 
-    this.device.queue.submit([encoder.finish()]);
+      for (let i = 0; i < batchCount; i++) {
+        const offset = i * 256;
+
+        const bakePass = encoder.beginComputePass();
+        bakePass.setPipeline(this.bakePipeline);
+        bakePass.setBindGroup(0, bakeBindGroup, [offset]);
+        bakePass.dispatchWorkgroups(CHUNK_WORKGROUPS, CHUNK_WORKGROUPS, CHUNK_WORKGROUPS);
+        bakePass.end();
+
+        const reducePass = encoder.beginComputePass();
+        reducePass.setPipeline(this.chunkReducePipeline);
+        reducePass.setBindGroup(0, reduceBindGroup, [offset]);
+        reducePass.dispatchWorkgroups(1, 1, 1);
+        reducePass.end();
+      }
+
+      this.device.queue.submit([encoder.finish()]);
+    }
   }
 
   render(
@@ -557,28 +580,63 @@ export class GPURenderer {
     height: number,
     wireframes: WireframeBox[],
   ): void {
-    // Write raymarcher uniforms
-    const data = new ArrayBuffer(160);
+    // Write uniforms (240 bytes)
+    const data = new ArrayBuffer(UNIFORM_SIZE);
     const f32 = new Float32Array(data);
     const i32 = new Int32Array(data);
+    const u32 = new Uint32Array(data);
 
+    // 0-15: camera_matrix (64 bytes)
     f32.set(cameraMatrixWorld, 0);
+    // 16-31: proj_matrix_inverse (64 bytes)
     f32.set(cameraProjectionMatrixInverse, 16);
+    // 32-33: resolution (8 bytes)
     f32[32] = width;
     f32[33] = height;
-    f32[34] = BOUNDS;
-    f32[35] = RESOLUTION;
-    f32[36] = MIP_LEVELS[0].dst;
-    f32[37] = MIP_LEVELS[1].dst;
-    f32[38] = MIP_LEVELS[2].dst;
-    i32[39] = MIP_LEVELS.length;
+    // 34: voxel_size
+    f32[34] = VOXEL_SIZE;
+    // 35: chunk_world_size
+    f32[35] = CHUNK_WORLD_SIZE;
+    // 36-38: chunk_map_offset (vec3<i32>) + pad at 39
+    const mapOffset = this.chunkManager.getChunkMapOffset();
+    i32[36] = mapOffset[0];
+    i32[37] = mapOffset[1];
+    i32[38] = mapOffset[2];
+    i32[39] = 0; // pad
+    // 40-42: chunk_map_size (vec3<u32>) + pad at 43
+    u32[40] = CHUNK_MAP_SIZE;
+    u32[41] = CHUNK_MAP_SIZE;
+    u32[42] = CHUNK_MAP_SIZE;
+    u32[43] = 0; // pad
+    // 44-46: atlas_slots (vec3<u32>) + pad at 47
+    u32[44] = ATLAS_SLOTS[0];
+    u32[45] = ATLAS_SLOTS[1];
+    u32[46] = ATLAS_SLOTS[2];
+    u32[47] = 0; // pad
+    // 48: max_distance + 3 pad
+    f32[48] = 100.0;
+    f32[49] = 0;
+    f32[50] = 0;
+    f32[51] = 0;
+    // 52-54: world_bounds_min (vec3<f32>) + pad at 55
+    const bmin = this.chunkManager.worldBoundsMin;
+    f32[52] = bmin[0];
+    f32[53] = bmin[1];
+    f32[54] = bmin[2];
+    f32[55] = 0;
+    // 56-58: world_bounds_max (vec3<f32>) + pad at 59
+    const bmax = this.chunkManager.worldBoundsMax;
+    f32[56] = bmax[0];
+    f32[57] = bmax[1];
+    f32[58] = bmax[2];
+    f32[59] = 0;
 
     this.device.queue.writeBuffer(this.uniformBuffer, 0, data);
 
     const encoder = this.device.createCommandEncoder();
     const textureView = this.context.getCurrentTexture().createView();
 
-    // Raymarcher pass (color + world position)
+    // Raymarcher pass
     const worldPosView = this.worldPosTexture.createView();
     const pass = encoder.beginRenderPass({
       colorAttachments: [
@@ -616,21 +674,53 @@ export class GPURenderer {
 
       linesPass.setPipeline(this.linesPipeline);
 
-      const wfCount = Math.min(wireframes.length, 8);
+      // Group wireframes by color to batch draw calls
+      const colorGroups = new Map<string, { color: [number, number, number, number]; boxes: WireframeBox[] }>();
+      for (const wf of wireframes) {
+        const key = wf.color.join(",");
+        let group = colorGroups.get(key);
+        if (!group) {
+          group = { color: wf.color, boxes: [] };
+          colorGroups.set(key, group);
+        }
+        group.boxes.push(wf);
+      }
 
-      // Write all vertex + uniform data upfront
-      for (let i = 0; i < wfCount; i++) {
-        const wf = wireframes[i];
-        const verts = buildBoxWireframeVerts(wf.center, wf.halfSize);
-        this.device.queue.writeBuffer(this.linesVertexBuffer, i * 24 * 12, verts);
+      // Write uniforms for each color group (one per 256-byte slot)
+      let uniformSlot = 0;
+      const draws: { uniformOffset: number; vertexOffset: number; vertexCount: number }[] = [];
+      let vertexOffset = 0;
+
+      for (const group of colorGroups.values()) {
+        if (uniformSlot >= 256) break;
 
         const lineUniforms = new Float32Array(20);
         lineUniforms.set(viewProjectionMatrix, 0);
-        lineUniforms[16] = wf.color[0];
-        lineUniforms[17] = wf.color[1];
-        lineUniforms[18] = wf.color[2];
-        lineUniforms[19] = wf.color[3];
-        this.device.queue.writeBuffer(this.linesUniformBuffer, i * 256, lineUniforms);
+        lineUniforms[16] = group.color[0];
+        lineUniforms[17] = group.color[1];
+        lineUniforms[18] = group.color[2];
+        lineUniforms[19] = group.color[3];
+        this.device.queue.writeBuffer(this.linesUniformBuffer, uniformSlot * 256, lineUniforms);
+
+        // Write all box vertices for this group contiguously
+        const boxCount = group.boxes.length;
+        const totalVerts = boxCount * 24;
+        const batchVerts = new Float32Array(totalVerts * 3);
+        for (let i = 0; i < boxCount; i++) {
+          const wf = group.boxes[i];
+          const verts = buildBoxWireframeVerts(wf.center, wf.halfSize);
+          batchVerts.set(verts, i * 24 * 3);
+        }
+        this.device.queue.writeBuffer(this.linesVertexBuffer, vertexOffset, batchVerts);
+
+        draws.push({
+          uniformOffset: uniformSlot * 256,
+          vertexOffset,
+          vertexCount: totalVerts,
+        });
+
+        vertexOffset += batchVerts.byteLength;
+        uniformSlot++;
       }
 
       const bindGroup = this.device.createBindGroup({
@@ -640,16 +730,34 @@ export class GPURenderer {
         ],
       });
 
-      for (let i = 0; i < wfCount; i++) {
-        linesPass.setBindGroup(0, bindGroup, [i * 256]);
-        linesPass.setVertexBuffer(0, this.linesVertexBuffer, i * 24 * 12);
-        linesPass.draw(24);
+      for (const draw of draws) {
+        linesPass.setBindGroup(0, bindGroup, [draw.uniformOffset]);
+        linesPass.setVertexBuffer(0, this.linesVertexBuffer, draw.vertexOffset);
+        linesPass.draw(draw.vertexCount);
       }
 
       linesPass.end();
     }
 
     this.device.queue.submit([encoder.finish()]);
+  }
+
+  getDebugChunkOrigins(): [number, number, number][] {
+    return this.chunkManager.getAllocatedChunkOrigins();
+  }
+
+  getDebugWorldBounds(): { min: [number, number, number]; max: [number, number, number] } {
+    return {
+      min: this.chunkManager.worldBoundsMin,
+      max: this.chunkManager.worldBoundsMax,
+    };
+  }
+
+  getDebugChunkStats(): { used: number; max: number } {
+    return {
+      used: this.chunkManager.getAllocatedChunkCount(),
+      max: this.chunkManager.getMaxChunks(),
+    };
   }
 
   resize(width: number, height: number): void {
@@ -661,16 +769,16 @@ export class GPURenderer {
 
   destroy(): void {
     this.context?.unconfigure();
-    this.volumeTexture?.destroy();
-    this.mipTextures?.forEach((t) => t.destroy());
+    this.atlasTexture?.destroy();
+    this.chunkMapTexture?.destroy();
+    this.chunkDistTexture?.destroy();
     this.worldPosTexture?.destroy();
     this.pickStagingBuffer?.destroy();
     this.bakeParamsBuffer?.destroy();
     this.shapeBuffer?.destroy();
-    this.mipParamsBuffers?.forEach((b) => b.destroy());
+    this.reduceParamsBuffer?.destroy();
     this.uniformBuffer?.destroy();
-    // Don't call device.destroy() — it invalidates the canvas context
-    // permanently, breaking React StrictMode's double-invoke in dev.
-    // The device will be GC'd when no longer referenced.
+    this.linesVertexBuffer?.destroy();
+    this.linesUniformBuffer?.destroy();
   }
 }

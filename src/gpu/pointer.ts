@@ -8,12 +8,12 @@ import {
   commitGizmoDrag, cancelGizmoDrag,
   type Vec3, type SDFShape,
 } from "../state/sceneStore";
-import { BOUNDS } from "../constants";
 import type { GPURenderer } from "./renderer";
 
+const FLOOR_Y = 0;
 const raycaster = new Raycaster();
 const mouse = new Vector2();
-const floorPlane = new Plane(new Vector3(0, 1, 0), BOUNDS); // y = -BOUNDS
+const floorPlane = new Plane(new Vector3(0, 1, 0), -FLOOR_Y); // y = FLOOR_Y
 const intersection = new Vector3();
 
 function setMouseNDC(e: PointerEvent, canvas: HTMLCanvasElement) {
@@ -351,7 +351,7 @@ export function setupPointer(
               return;
             }
             point = floorHit;
-            floorY = -BOUNDS;
+            floorY = FLOOR_Y;
           }
 
           if (tool === "sphere") {
@@ -367,9 +367,9 @@ export function setupPointer(
           return;
         }
         if (tool === "sphere") {
-          startRadiusDrag(floorHit, -BOUNDS);
+          startRadiusDrag(floorHit, FLOOR_Y);
         } else {
-          startDrag(floorHit, -BOUNDS);
+          startDrag(floorHit, FLOOR_Y);
         }
       }
     } else if (phase === "height") {

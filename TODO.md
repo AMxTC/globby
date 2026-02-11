@@ -10,6 +10,11 @@ Replace single large 3D texture with sparse chunk grid to support larger scenes 
 - Ray marcher steps through chunk grid, skips empty chunks
 - Mip chain per-chunk or global coarse mip for acceleration
 - Enables effectively unbounded scenes with localized geometry
+- debug viz for chunk boundaries and memory usage
+
+1. Increase voxel size (lower resolution but covers more space) — e.g. 4× bigger voxels means 4× bigger chunks, 64× fewer chunks needed
+2. Increase atlas slots — more texture memory but handles bigger scenes
+3. Both — balance resolution vs coverage
 
 ## Layers + Masks
 

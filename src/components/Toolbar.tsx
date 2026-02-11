@@ -4,6 +4,7 @@ import {
   Circle,
   Cone,
   Cylinder,
+  Grid3x3,
   MousePointer,
   Pyramid,
 } from "lucide-react";
@@ -49,6 +50,19 @@ export default function Toolbar() {
           <t.icon size={20} />
         </Toggle>
       ))}
+
+      <div className="w-px h-6 bg-border mx-1" />
+
+      <Toggle
+        pressed={snap.showDebugChunks}
+        onPressedChange={() => {
+          sceneState.showDebugChunks = !sceneState.showDebugChunks;
+        }}
+        size="icon"
+        title="Debug Chunks"
+      >
+        <Grid3x3 size={20} />
+      </Toggle>
 
       <div className="w-px h-6 bg-border mx-1" />
 

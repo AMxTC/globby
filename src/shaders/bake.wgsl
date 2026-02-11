@@ -1,8 +1,8 @@
 struct BakeParams {
-  resolution: u32,
+  chunk_origin: vec3<f32>,
   shape_count: u32,
-  bounds: f32,
-  _pad: f32,
+  atlas_offset: vec3<u32>,
+  voxel_size: f32,
 }
 
 struct Shape {
@@ -47,55 +47,46 @@ fn sdCone(p: vec3<f32>, h: f32, r: f32) -> f32 {
 }
 
 fn sdPyramid(p: vec3<f32>, h: f32, r: f32) -> f32 {
-  // Scale to reference pyramid (base half-width 0.5)
   var pp = p;
   pp.x = pp.x / (2.0 * r);
   pp.z = pp.z / (2.0 * r);
-  
+
   let m2 = h * h + 0.25;
-  
+
   pp.x = abs(pp.x);
   pp.z = abs(pp.z);
-  
-  // Swap if z > x
+
   if (pp.z > pp.x) {
     let temp = pp.x;
     pp.x = pp.z;
     pp.z = temp;
   }
-  
+
   pp.x = pp.x - 0.5;
   pp.z = pp.z - 0.5;
-  
+
   let q = vec3<f32>(pp.z, h * pp.y - 0.5 * pp.x, h * pp.x + 0.5 * pp.y);
-  
+
   let s = max(-q.x, 0.0);
   let t = clamp((q.y - 0.5 * pp.z) / (m2 + 0.25), 0.0, 1.0);
-  
+
   let a = m2 * (q.x + s) * (q.x + s) + q.y * q.y;
   let b = m2 * (q.x + 0.5 * t) * (q.x + 0.5 * t) + (q.y - m2 * t) * (q.y - m2 * t);
-  
+
   let d2 = select(min(a, b), 0.0, min(q.y, -q.x * m2 - q.y * 0.5) > 0.0);
-  
+
   return sqrt((d2 + q.z * q.z) / m2) * sign(max(q.z, -pp.y)) * 2.0 * r;
 }
 
+const SLOT_SIZE: u32 = 34u;
+
 @compute @workgroup_size(4, 4, 4)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-  let res = params.resolution;
-  if (gid.x >= res || gid.y >= res || gid.z >= res) {
+  if (gid.x >= SLOT_SIZE || gid.y >= SLOT_SIZE || gid.z >= SLOT_SIZE) {
     return;
   }
 
-  let bounds = params.bounds;
-  // Map voxel centers to world: voxel i → -bounds + (i + 0.5) * (2*bounds/res)
-  // This matches the ray marcher's textureSampleLevel UVW convention
-  let step = (2.0 * bounds) / f32(res);
-  let world_pos = vec3<f32>(
-    -bounds + (f32(gid.x) + 0.5) * step,
-    -bounds + (f32(gid.y) + 0.5) * step,
-    -bounds + (f32(gid.z) + 0.5) * step,
-  );
+  let world_pos = params.chunk_origin + (vec3<f32>(gid) - 0.5) * params.voxel_size;
 
   var d: f32 = 1e10;
   for (var i: u32 = 0u; i < params.shape_count; i = i + 1u) {
@@ -112,5 +103,6 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     d = min(d, d_shape);
   }
 
-  textureStore(output, gid, vec4<f32>(d, 0.0, 0.0, 0.0));
+  let texel = params.atlas_offset + gid;
+  textureStore(output, texel, vec4<f32>(d, 0.0, 0.0, 0.0));
 }
