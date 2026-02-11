@@ -16,3 +16,9 @@ Replace single large 3D texture with sparse chunk grid to support larger scenes 
 ## Undo/Redo System
 
 ## Click on shapes and move them around (select + transform tools)
+
+## edit shapes (edit base of recangle, push pull top)
+
+## extruded polygon tool
+
+## push pull side faces of shapes

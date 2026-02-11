@@ -1,7 +1,7 @@
 import { proxy } from "valtio";
 import { BOUNDS, SHAPE_TYPES, type ShapeType } from "../constants";
 
-type Vec3 = [number, number, number];
+export type Vec3 = [number, number, number];
 
 export interface SDFShape {
   id: string;
@@ -24,9 +24,27 @@ export interface DragState {
   previewSize: Vec3;
 }
 
+export interface GizmoDrag {
+  active: boolean;
+  axis: "x" | "y" | "z";
+  shapeId: string;
+  startMousePos: Vec3;
+  startShapePos: Vec3;
+  previewPos: Vec3;
+}
+
 export const sceneState = proxy({
   shapes: [] as SDFShape[],
   activeTool: "select" as "select" | ShapeType,
+  selectedShapeId: null as string | null,
+  gizmoDrag: {
+    active: false,
+    axis: "x" as "x" | "y" | "z",
+    shapeId: "",
+    startMousePos: [0, 0, 0] as Vec3,
+    startShapePos: [0, 0, 0] as Vec3,
+    previewPos: [0, 0, 0] as Vec3,
+  } as GizmoDrag,
   drag: {
     active: false,
     phase: "idle",
@@ -208,4 +226,49 @@ function resetDrag() {
   sceneState.drag.baseMidX = 0;
   sceneState.drag.baseMidZ = 0;
   sceneState.drag.baseRadius = 0;
+}
+
+export function selectShape(id: string | null) {
+  sceneState.selectedShapeId = id;
+}
+
+export function moveShape(id: string, newPosition: Vec3) {
+  const shape = sceneState.shapes.find((s) => s.id === id);
+  if (!shape) return;
+  shape.position = newPosition;
+  sceneState.version++;
+}
+
+export function startGizmoDrag(
+  axis: "x" | "y" | "z",
+  shapeId: string,
+  mousePos: Vec3,
+  shapePos: Vec3,
+) {
+  sceneState.gizmoDrag.active = true;
+  sceneState.gizmoDrag.axis = axis;
+  sceneState.gizmoDrag.shapeId = shapeId;
+  sceneState.gizmoDrag.startMousePos = mousePos;
+  sceneState.gizmoDrag.startShapePos = shapePos;
+  sceneState.gizmoDrag.previewPos = [...shapePos] as Vec3;
+}
+
+export function updateGizmoDrag(previewPos: Vec3) {
+  sceneState.gizmoDrag.previewPos = previewPos;
+}
+
+export function commitGizmoDrag() {
+  if (!sceneState.gizmoDrag.active) return;
+  const { shapeId, previewPos } = sceneState.gizmoDrag;
+  moveShape(shapeId, [...previewPos] as Vec3);
+  resetGizmoDrag();
+}
+
+export function cancelGizmoDrag() {
+  resetGizmoDrag();
+}
+
+function resetGizmoDrag() {
+  sceneState.gizmoDrag.active = false;
+  sceneState.gizmoDrag.shapeId = "";
 }

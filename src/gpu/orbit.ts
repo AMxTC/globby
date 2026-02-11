@@ -13,10 +13,32 @@ export function createOrbitCamera(canvas: HTMLCanvasElement) {
 
   const controls = new OrbitControls(camera, canvas);
   controls.enableDamping = false;
+  // Right-click = orbit, Shift+right-click = pan, left-click reserved for tools
   controls.mouseButtons = {
-    LEFT: MOUSE.ROTATE,
+    LEFT: null as unknown as MOUSE,
     MIDDLE: MOUSE.DOLLY,
-    RIGHT: MOUSE.PAN,
+    RIGHT: MOUSE.ROTATE,
+  };
+
+  // Swap to pan when Shift is held
+  function onMouseDown(e: MouseEvent) {
+    if (e.button === 2 && e.shiftKey) {
+      controls.mouseButtons.RIGHT = MOUSE.PAN;
+    }
+  }
+  function onMouseUp(e: MouseEvent) {
+    if (e.button === 2) {
+      controls.mouseButtons.RIGHT = MOUSE.ROTATE;
+    }
+  }
+  canvas.addEventListener("mousedown", onMouseDown);
+  canvas.addEventListener("mouseup", onMouseUp);
+
+  const origDispose = controls.dispose.bind(controls);
+  controls.dispose = () => {
+    canvas.removeEventListener("mousedown", onMouseDown);
+    canvas.removeEventListener("mouseup", onMouseUp);
+    origDispose();
   };
 
   return { camera, controls };

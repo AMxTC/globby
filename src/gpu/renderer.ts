@@ -221,15 +221,16 @@ export class GPURenderer {
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
 
-    // Lines vertex buffer: enough for bounds box (24 verts) + preview box (24 verts) = 48 * 12 bytes
+    // Lines vertex buffer: bounds + preview + selection + 3 gizmo axes + drag preview = up to 192 verts
     this.linesVertexBuffer = this.device.createBuffer({
-      size: 48 * 12,
+      size: 192 * 12,
       usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
     });
 
-    // Lines uniform buffer: mat4 (64) + vec4 color (16) = 80 bytes
+    // Lines uniform buffer: per-wireframe uniforms at 256-byte stride (for dynamic offsets)
+    // 80 bytes each (mat4 + vec4), aligned to 256; supports up to 8 wireframes
     this.linesUniformBuffer = this.device.createBuffer({
-      size: 80,
+      size: 256 * 8,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
   }
@@ -370,7 +371,7 @@ export class GPURenderer {
         {
           binding: 0,
           visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
-          buffer: { type: "uniform" },
+          buffer: { type: "uniform", hasDynamicOffset: true },
         },
       ],
     });
@@ -615,31 +616,34 @@ export class GPURenderer {
 
       linesPass.setPipeline(this.linesPipeline);
 
-      for (let i = 0; i < wireframes.length; i++) {
+      const wfCount = Math.min(wireframes.length, 8);
+
+      // Write all vertex + uniform data upfront
+      for (let i = 0; i < wfCount; i++) {
         const wf = wireframes[i];
         const verts = buildBoxWireframeVerts(wf.center, wf.halfSize);
-        const vertexOffset = i * 24 * 12; // 24 vertices * 12 bytes per vertex
-        this.device.queue.writeBuffer(this.linesVertexBuffer, vertexOffset, verts);
+        this.device.queue.writeBuffer(this.linesVertexBuffer, i * 24 * 12, verts);
 
-        // Write lines uniforms: viewProj (64 bytes) + color (16 bytes)
         const lineUniforms = new Float32Array(20);
         lineUniforms.set(viewProjectionMatrix, 0);
         lineUniforms[16] = wf.color[0];
         lineUniforms[17] = wf.color[1];
         lineUniforms[18] = wf.color[2];
         lineUniforms[19] = wf.color[3];
-        this.device.queue.writeBuffer(this.linesUniformBuffer, 0, lineUniforms);
+        this.device.queue.writeBuffer(this.linesUniformBuffer, i * 256, lineUniforms);
+      }
 
-        const bindGroup = this.device.createBindGroup({
-          layout: this.linesBindGroupLayout,
-          entries: [
-            { binding: 0, resource: { buffer: this.linesUniformBuffer } },
-          ],
-        });
+      const bindGroup = this.device.createBindGroup({
+        layout: this.linesBindGroupLayout,
+        entries: [
+          { binding: 0, resource: { buffer: this.linesUniformBuffer, size: 80 } },
+        ],
+      });
 
-        linesPass.setBindGroup(0, bindGroup);
-        linesPass.setVertexBuffer(0, this.linesVertexBuffer, vertexOffset);
-        linesPass.draw(24); // 12 edges * 2 verts
+      for (let i = 0; i < wfCount; i++) {
+        linesPass.setBindGroup(0, bindGroup, [i * 256]);
+        linesPass.setVertexBuffer(0, this.linesVertexBuffer, i * 24 * 12);
+        linesPass.draw(24);
       }
 
       linesPass.end();

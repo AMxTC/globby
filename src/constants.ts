@@ -1,7 +1,13 @@
-export const RESOLUTION = 128;
+export const RESOLUTION = 256;
 export const BOUNDS = 2.0;
 
-export const SHAPE_TYPES = ["box", "sphere", "cylinder", "pyramid", "cone"] as const;
+export const SHAPE_TYPES = [
+  "box",
+  "sphere",
+  "cylinder",
+  "pyramid",
+  "cone",
+] as const;
 export type ShapeType = (typeof SHAPE_TYPES)[number];
 
 export const SHAPE_TYPE_GPU: Record<ShapeType, number> = {

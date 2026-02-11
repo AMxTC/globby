@@ -5,7 +5,7 @@ import { sceneState, type SDFShape } from "./state/sceneStore";
 import { GPURenderer, type WireframeBox } from "./gpu/renderer";
 import { createOrbitCamera } from "./gpu/orbit";
 import { setupPointer } from "./gpu/pointer";
-import { BOUNDS, SHAPE_TYPES } from "./constants";
+import { BOUNDS } from "./constants";
 import Toolbar from "./components/Toolbar";
 
 export default function App() {
@@ -59,11 +59,6 @@ export default function App() {
       function frame() {
         if (destroyed) return;
 
-        // Disable orbit when actively drawing (base or height phase)
-        const drawing = sceneState.drag.phase !== "idle";
-        controls.enableRotate =
-          !drawing &&
-          !(SHAPE_TYPES as readonly string[]).includes(sceneState.activeTool);
         controls.update();
 
         // Get camera matrices
@@ -99,6 +94,51 @@ export default function App() {
             halfSize: [...drag.previewSize] as [number, number, number],
             color: wireframeColor,
           });
+        }
+
+        // Show selection wireframe + gizmo axes
+        const selectedId = sceneState.selectedShapeId;
+        if (selectedId) {
+          const shape = sceneState.shapes.find((s) => s.id === selectedId);
+          if (shape) {
+            const gizmo = sceneState.gizmoDrag;
+            const showPos: [number, number, number] = gizmo.active && gizmo.shapeId === selectedId
+              ? [...gizmo.previewPos] as [number, number, number]
+              : [...shape.position] as [number, number, number];
+            const showSize: [number, number, number] = [...shape.size] as [number, number, number];
+
+            // Selection box (white)
+            wireframes.push({
+              center: showPos,
+              halfSize: showSize,
+              color: [1, 1, 1, 0.6],
+            });
+
+            // Gizmo axes: thin elongated boxes
+            const gizmoLen = 0.3;
+            const gizmoThick = 0.005;
+
+            // X axis (red)
+            wireframes.push({
+              center: [showPos[0] + gizmoLen / 2, showPos[1], showPos[2]],
+              halfSize: [gizmoLen / 2, gizmoThick, gizmoThick],
+              color: [1, 0.2, 0.2, 1],
+            });
+
+            // Y axis (green)
+            wireframes.push({
+              center: [showPos[0], showPos[1] + gizmoLen / 2, showPos[2]],
+              halfSize: [gizmoThick, gizmoLen / 2, gizmoThick],
+              color: [0.2, 1, 0.2, 1],
+            });
+
+            // Z axis (blue)
+            wireframes.push({
+              center: [showPos[0], showPos[1], showPos[2] + gizmoLen / 2],
+              halfSize: [gizmoThick, gizmoThick, gizmoLen / 2],
+              color: [0.3, 0.3, 1, 1],
+            });
+          }
         }
 
         renderer.render(
