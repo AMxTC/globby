@@ -1,4 +1,4 @@
-import { PerspectiveCamera, MOUSE } from "three";
+import { PerspectiveCamera, MOUSE, TOUCH } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 
 export function createOrbitCamera(canvas: HTMLCanvasElement) {
@@ -18,6 +18,12 @@ export function createOrbitCamera(canvas: HTMLCanvasElement) {
     LEFT: null as unknown as MOUSE,
     MIDDLE: MOUSE.DOLLY,
     RIGHT: MOUSE.ROTATE,
+  };
+
+  // Touch: one-finger orbit, two-finger pan (no pinch zoom)
+  controls.touches = {
+    ONE: TOUCH.ROTATE,
+    TWO: TOUCH.PAN,
   };
 
   // Swap to pan when Shift is held

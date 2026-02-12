@@ -119,5 +119,52 @@ function onKeyDown(e: KeyboardEvent) {
 
 export function setupHotkeys(): () => void {
   window.addEventListener("keydown", onKeyDown);
-  return () => window.removeEventListener("keydown", onKeyDown);
+
+  // Multi-finger tap gestures: 2-finger tap = undo, 3-finger tap = redo
+  let maxTouches = 0;
+  let touchStartTime = 0;
+  let startX = 0;
+  let startY = 0;
+  let moved = false;
+
+  function onTouchStart(e: TouchEvent) {
+    if (e.touches.length === 1) {
+      // First finger down — reset tracking
+      maxTouches = 1;
+      touchStartTime = performance.now();
+      startX = e.touches[0].clientX;
+      startY = e.touches[0].clientY;
+      moved = false;
+    } else {
+      maxTouches = Math.max(maxTouches, e.touches.length);
+    }
+  }
+
+  function onTouchMove(e: TouchEvent) {
+    if (moved) return;
+    const dx = e.touches[0].clientX - startX;
+    const dy = e.touches[0].clientY - startY;
+    if (dx * dx + dy * dy > 100) moved = true; // 10px threshold
+  }
+
+  function onTouchEnd(e: TouchEvent) {
+    if (e.touches.length > 0) return; // still fingers down
+    const elapsed = performance.now() - touchStartTime;
+    if (elapsed < 300 && !moved) {
+      if (maxTouches === 2) undo();
+      else if (maxTouches === 3) redo();
+    }
+    maxTouches = 0;
+  }
+
+  window.addEventListener("touchstart", onTouchStart, { passive: true });
+  window.addEventListener("touchmove", onTouchMove, { passive: true });
+  window.addEventListener("touchend", onTouchEnd, { passive: true });
+
+  return () => {
+    window.removeEventListener("keydown", onKeyDown);
+    window.removeEventListener("touchstart", onTouchStart);
+    window.removeEventListener("touchmove", onTouchMove);
+    window.removeEventListener("touchend", onTouchEnd);
+  };
 }

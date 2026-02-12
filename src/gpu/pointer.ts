@@ -249,6 +249,9 @@ export function setupPointer(
   let gizmoDragStartAxisT = 0;
 
   function onPointerDown(e: PointerEvent) {
+    // Ignore secondary touch fingers (e.g. second finger in a two-finger pan)
+    if (e.pointerType === "touch" && !e.isPrimary) return;
+
     const tool = sceneState.activeTool;
 
     // --- Select tool handling ---
