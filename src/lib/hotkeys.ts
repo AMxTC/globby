@@ -10,6 +10,8 @@ import {
   deleteSelectedShape,
   cancelDrag,
   cancelGizmoDrag,
+  undo,
+  redo,
 } from "../state/sceneStore";
 import * as THREE from "three";
 
@@ -40,6 +42,18 @@ function isInputFocused(e: KeyboardEvent): boolean {
 }
 
 const HOTKEYS: HotkeyDef[] = [
+  {
+    name: "Undo",
+    description: "Undo last action",
+    combo: { key: "z", meta: true },
+    action: undo,
+  },
+  {
+    name: "Redo",
+    description: "Redo last undone action",
+    combo: { key: "z", meta: true, shift: true },
+    action: redo,
+  },
   {
     name: "Delete",
     description: "Delete selected shape",

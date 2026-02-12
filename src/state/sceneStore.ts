@@ -64,7 +64,54 @@ export const sceneState = proxy({
 
 let nextId = 1;
 
+// --- Undo/Redo ---
+
+type ShapeSnapshot = { id: string; type: ShapeType; position: Vec3; size: Vec3 }[];
+
+const MAX_UNDO = 100;
+const undoStack: ShapeSnapshot[] = [];
+const redoStack: ShapeSnapshot[] = [];
+
+function snapshotShapes(): ShapeSnapshot {
+  return sceneState.shapes.map((s) => ({
+    id: s.id,
+    type: s.type,
+    position: [...s.position] as Vec3,
+    size: [...s.size] as Vec3,
+  }));
+}
+
+function pushUndo() {
+  undoStack.push(snapshotShapes());
+  if (undoStack.length > MAX_UNDO) undoStack.shift();
+  redoStack.length = 0;
+}
+
+function restoreShapes(snapshot: ShapeSnapshot) {
+  sceneState.shapes.splice(0, sceneState.shapes.length, ...snapshot);
+  // Keep nextId above any restored id
+  for (const s of snapshot) {
+    const n = Number(s.id);
+    if (n >= nextId) nextId = n + 1;
+  }
+  sceneState.selectedShapeId = null;
+  sceneState.version++;
+}
+
+export function undo() {
+  if (undoStack.length === 0) return;
+  redoStack.push(snapshotShapes());
+  restoreShapes(undoStack.pop()!);
+}
+
+export function redo() {
+  if (redoStack.length === 0) return;
+  undoStack.push(snapshotShapes());
+  restoreShapes(redoStack.pop()!);
+}
+
 export function addShape(shape: Omit<SDFShape, "id">) {
+  pushUndo();
   sceneState.shapes.push({ ...shape, id: String(nextId++) });
   sceneState.version++;
 }
@@ -238,6 +285,7 @@ export function deleteSelectedShape() {
   if (!id) return;
   const idx = sceneState.shapes.findIndex((s) => s.id === id);
   if (idx >= 0) {
+    pushUndo();
     sceneState.shapes.splice(idx, 1);
     sceneState.selectedShapeId = null;
     sceneState.version++;
@@ -247,6 +295,7 @@ export function deleteSelectedShape() {
 export function moveShape(id: string, newPosition: Vec3) {
   const shape = sceneState.shapes.find((s) => s.id === id);
   if (!shape) return;
+  pushUndo();
   shape.position = newPosition;
   sceneState.version++;
 }
