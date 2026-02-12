@@ -9,7 +9,7 @@ struct Shape {
   position: vec3<f32>,
   shape_type: u32,
   size: vec3<f32>,
-  _pad1: f32,
+  transfer_packed: u32, // low 16 = mode, high 16 = opacity*1000
 }
 
 @group(0) @binding(0) var<uniform> params: BakeParams;
@@ -78,6 +78,11 @@ fn sdPyramid(p: vec3<f32>, h: f32, r: f32) -> f32 {
   return sqrt((d2 + q.z * q.z) / m2) * sign(max(q.z, -pp.y)) * 2.0 * r;
 }
 
+fn smin(a: f32, b: f32, k: f32) -> f32 {
+  let h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+  return mix(b, a, h) - k * h * (1.0 - h);
+}
+
 const SLOT_SIZE: u32 = 34u;
 
 @compute @workgroup_size(4, 4, 4)
@@ -100,7 +105,43 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
       case 4u: { d_shape = sdCone(local_p, shapes[i].size.y, shapes[i].size.x); }
       default: { d_shape = 1e10; }
     }
-    d = min(d, d_shape);
+
+    // Unpack: bits 0-7 = mode, bits 8-19 = opacity*4095, bits 20-31 = param*4095
+    let packed = shapes[i].transfer_packed;
+    let mode = packed & 0xFFu;
+    let opacity = f32((packed >> 8u) & 0xFFFu) / 4095.0;
+    let param = f32((packed >> 20u) & 0xFFFu) / 4095.0;
+
+    // d_scaled lerps shape toward no-effect at low opacity
+    let d_scaled = mix(d, d_shape, opacity);
+
+    switch mode {
+      // 0: union (hard min)
+      case 0u: { d = min(d, d_scaled); }
+      // 1: smooth union — param controls smoothness (0..0.5)
+      case 1u: { d = smin(d, d_scaled, param * 0.5); }
+      // 2: subtract
+      case 2u: { d = max(d, mix(d, -d_shape, opacity)); }
+      // 3: intersect
+      case 3u: { d = max(d, d_scaled); }
+      // 4: addition (plain sum of SDFs)
+      case 4u: { d = mix(d, d + d_shape, opacity); }
+      // 5: multiply
+      case 5u: { d = mix(d, d * d_shape, opacity); }
+      // 6: pipe — param controls thickness (0..0.2)
+      case 6u: {
+        let thickness = param * 0.2;
+        let pipe_d = abs(max(d, d_shape)) - thickness;
+        d = mix(d, pipe_d, opacity);
+      }
+      // 7: engrave — param controls depth (0..0.2)
+      case 7u: {
+        let depth = param * 0.2;
+        let engrave_d = max(d, -(abs(d_shape) - depth));
+        d = mix(d, engrave_d, opacity);
+      }
+      default: { d = min(d, d_scaled); }
+    }
   }
 
   let texel = params.atlas_offset + gid;

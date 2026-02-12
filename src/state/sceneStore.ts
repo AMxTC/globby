@@ -1,5 +1,5 @@
 import { proxy } from "valtio";
-import { SHAPE_TYPES, type ShapeType } from "../constants";
+import { SHAPE_TYPES, type ShapeType, type TransferMode } from "../constants";
 
 export type Vec3 = [number, number, number];
 
@@ -8,6 +8,16 @@ export interface SDFShape {
   type: ShapeType;
   position: Vec3;
   size: Vec3;
+  layerId: string;
+}
+
+export interface Layer {
+  id: string;
+  name: string;
+  transferMode: TransferMode;
+  opacity: number; // 0..1
+  transferParam: number; // 0..1, mode-specific parameter
+  visible: boolean;
 }
 
 export interface DragState {
@@ -35,6 +45,10 @@ export interface GizmoDrag {
 
 export const sceneState = proxy({
   shapes: [] as SDFShape[],
+  layers: [
+    { id: "1", name: "Layer 1", transferMode: "union", opacity: 1, transferParam: 0.5, visible: true },
+  ] as Layer[],
+  activeLayerId: "1" as string,
   activeTool: "select" as "select" | ShapeType,
   selectedShapeId: null as string | null,
   showDebugChunks: false,
@@ -64,36 +78,60 @@ export const sceneState = proxy({
 });
 
 let nextId = 1;
+let nextLayerId = 2; // Layer "1" already exists
 
 // --- Undo/Redo ---
 
-type ShapeSnapshot = { id: string; type: ShapeType; position: Vec3; size: Vec3 }[];
+type ShapeSnapshot = {
+  id: string;
+  type: ShapeType;
+  position: Vec3;
+  size: Vec3;
+  layerId: string;
+}[];
+
+interface SceneSnapshot {
+  shapes: ShapeSnapshot;
+  layers: Layer[];
+  activeLayerId: string;
+}
 
 const MAX_UNDO = 100;
-const undoStack: ShapeSnapshot[] = [];
-const redoStack: ShapeSnapshot[] = [];
+const undoStack: SceneSnapshot[] = [];
+const redoStack: SceneSnapshot[] = [];
 
-function snapshotShapes(): ShapeSnapshot {
-  return sceneState.shapes.map((s) => ({
-    id: s.id,
-    type: s.type,
-    position: [...s.position] as Vec3,
-    size: [...s.size] as Vec3,
-  }));
+function snapshot(): SceneSnapshot {
+  return {
+    shapes: sceneState.shapes.map((s) => ({
+      id: s.id,
+      type: s.type,
+      position: [...s.position] as Vec3,
+      size: [...s.size] as Vec3,
+      layerId: s.layerId,
+    })),
+    layers: sceneState.layers.map((l) => ({ ...l })),
+    activeLayerId: sceneState.activeLayerId,
+  };
 }
 
 function pushUndo() {
-  undoStack.push(snapshotShapes());
+  undoStack.push(snapshot());
   if (undoStack.length > MAX_UNDO) undoStack.shift();
   redoStack.length = 0;
 }
 
-function restoreShapes(snapshot: ShapeSnapshot) {
-  sceneState.shapes.splice(0, sceneState.shapes.length, ...snapshot);
+function restore(snap: SceneSnapshot) {
+  sceneState.shapes.splice(0, sceneState.shapes.length, ...snap.shapes);
+  sceneState.layers.splice(0, sceneState.layers.length, ...snap.layers);
+  sceneState.activeLayerId = snap.activeLayerId;
   // Keep nextId above any restored id
-  for (const s of snapshot) {
+  for (const s of snap.shapes) {
     const n = Number(s.id);
     if (n >= nextId) nextId = n + 1;
+  }
+  for (const l of snap.layers) {
+    const n = Number(l.id);
+    if (n >= nextLayerId) nextLayerId = n + 1;
   }
   sceneState.selectedShapeId = null;
   sceneState.version++;
@@ -101,19 +139,23 @@ function restoreShapes(snapshot: ShapeSnapshot) {
 
 export function undo() {
   if (undoStack.length === 0) return;
-  redoStack.push(snapshotShapes());
-  restoreShapes(undoStack.pop()!);
+  redoStack.push(snapshot());
+  restore(undoStack.pop()!);
 }
 
 export function redo() {
   if (redoStack.length === 0) return;
-  undoStack.push(snapshotShapes());
-  restoreShapes(redoStack.pop()!);
+  undoStack.push(snapshot());
+  restore(redoStack.pop()!);
 }
 
-export function addShape(shape: Omit<SDFShape, "id">) {
+export function addShape(shape: Omit<SDFShape, "id" | "layerId">) {
   pushUndo();
-  sceneState.shapes.push({ ...shape, id: String(nextId++) });
+  sceneState.shapes.push({
+    ...shape,
+    id: String(nextId++),
+    layerId: sceneState.activeLayerId,
+  });
   sceneState.version++;
 }
 
@@ -123,6 +165,85 @@ export function setTool(tool: "select" | ShapeType) {
 
 export function isShapeTool(tool: string): tool is ShapeType {
   return (SHAPE_TYPES as readonly string[]).includes(tool);
+}
+
+// --- Layer CRUD ---
+
+export function addLayer() {
+  pushUndo();
+  const id = String(nextLayerId++);
+  sceneState.layers.push({
+    id,
+    name: `Layer ${id}`,
+    transferMode: "union",
+    opacity: 1,
+    transferParam: 0.5,
+    visible: true,
+  });
+  sceneState.activeLayerId = id;
+  sceneState.version++;
+}
+
+export function removeLayer(id: string) {
+  if (sceneState.layers.length <= 1) return;
+  pushUndo();
+  const idx = sceneState.layers.findIndex((l) => l.id === id);
+  if (idx < 0) return;
+  sceneState.layers.splice(idx, 1);
+  // Remove shapes on that layer
+  sceneState.shapes = sceneState.shapes.filter((s) => s.layerId !== id);
+  // If active layer was removed, switch to first layer
+  if (sceneState.activeLayerId === id) {
+    sceneState.activeLayerId = sceneState.layers[0].id;
+  }
+  sceneState.selectedShapeId = null;
+  sceneState.version++;
+}
+
+export function renameLayer(id: string, name: string) {
+  const layer = sceneState.layers.find((l) => l.id === id);
+  if (layer) layer.name = name;
+}
+
+export function setLayerTransferMode(id: string, mode: TransferMode) {
+  const layer = sceneState.layers.find((l) => l.id === id);
+  if (!layer) return;
+  pushUndo();
+  layer.transferMode = mode;
+  sceneState.version++;
+}
+
+export function setLayerOpacity(id: string, opacity: number) {
+  const layer = sceneState.layers.find((l) => l.id === id);
+  if (!layer) return;
+  layer.opacity = Math.max(0, Math.min(1, opacity));
+  sceneState.version++;
+}
+
+export function setLayerTransferParam(id: string, param: number) {
+  const layer = sceneState.layers.find((l) => l.id === id);
+  if (!layer) return;
+  layer.transferParam = Math.max(0, Math.min(1, param));
+  sceneState.version++;
+}
+
+export function toggleLayerVisibility(id: string) {
+  const layer = sceneState.layers.find((l) => l.id === id);
+  if (!layer) return;
+  layer.visible = !layer.visible;
+  sceneState.version++;
+}
+
+export function setActiveLayer(id: string) {
+  sceneState.activeLayerId = id;
+}
+
+export function reorderLayers(fromIndex: number, toIndex: number) {
+  if (fromIndex === toIndex) return;
+  pushUndo();
+  const [layer] = sceneState.layers.splice(fromIndex, 1);
+  sceneState.layers.splice(toIndex, 0, layer);
+  sceneState.version++;
 }
 
 export function startDrag(worldPoint: Vec3, floorY: number = 0) {
@@ -338,7 +459,9 @@ function resetGizmoDrag() {
 // Non-proxied refs for Three.js objects (valtio proxy would break them)
 export const sceneRefs: {
   camera: import("three").PerspectiveCamera | null;
-  controls: import("three/examples/jsm/controls/OrbitControls.js").OrbitControls | null;
+  controls:
+    | import("three/examples/jsm/controls/OrbitControls.js").OrbitControls
+    | null;
 } = {
   camera: null,
   controls: null,

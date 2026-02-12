@@ -23,3 +23,26 @@ export const SHAPE_TYPE_GPU: Record<ShapeType, number> = {
   pyramid: 3,
   cone: 4,
 };
+
+export const TRANSFER_MODES = [
+  "union",
+  "smooth_union",
+  "subtract",
+  "intersect",
+  "addition",
+  "multiply",
+  "pipe",
+  "engrave",
+] as const;
+export type TransferMode = (typeof TRANSFER_MODES)[number];
+
+export const TRANSFER_MODE_GPU: Record<TransferMode, number> = {
+  union: 0,
+  smooth_union: 1,
+  subtract: 2,
+  intersect: 3,
+  addition: 4,
+  multiply: 5,
+  pipe: 6,
+  engrave: 7,
+};

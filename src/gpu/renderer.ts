@@ -1,6 +1,7 @@
 import { sceneState, type SDFShape } from "../state/sceneStore";
 import {
   SHAPE_TYPE_GPU,
+  TRANSFER_MODE_GPU,
   VOXEL_SIZE,
   CHUNK_SLOT_SIZE,
   CHUNK_WORLD_SIZE,
@@ -8,7 +9,7 @@ import {
   ATLAS_SLOTS,
   CHUNK_MAP_SIZE,
 } from "../constants";
-import type { ShapeType } from "../constants";
+import type { ShapeType, TransferMode } from "../constants";
 import { ChunkManager } from "./chunkManager";
 import bakeWgsl from "../shaders/bake.wgsl?raw";
 import chunkReduceWgsl from "../shaders/chunkReduce.wgsl?raw";
@@ -453,7 +454,24 @@ export class GPURenderer {
   }
 
   bake(shapes: readonly SDFShape[]): void {
-    const shapeCount = Math.min(shapes.length, MAX_SHAPES);
+    // Sort shapes by layer order (bottom layer first)
+    const layers = sceneState.layers;
+    const layerOrder = new Map<string, number>();
+    for (let i = 0; i < layers.length; i++) {
+      layerOrder.set(layers[i].id, i);
+    }
+    const hiddenLayers = new Set<string>();
+    const layerInfo = new Map<string, { mode: TransferMode; opacity: number; param: number }>();
+    for (const l of layers) {
+      layerInfo.set(l.id, { mode: l.transferMode as TransferMode, opacity: l.opacity, param: l.transferParam });
+      if (!l.visible) hiddenLayers.add(l.id);
+    }
+
+    const sorted = [...shapes].filter((s) => !hiddenLayers.has(s.layerId)).sort((a, b) => {
+      return (layerOrder.get(a.layerId) ?? 0) - (layerOrder.get(b.layerId) ?? 0);
+    });
+
+    const shapeCount = Math.min(sorted.length, MAX_SHAPES);
 
     // Sync chunk manager with current shapes
     const { dirtyChunks, chunkMapData } = this.chunkManager.sync(shapes);
@@ -475,7 +493,7 @@ export class GPURenderer {
       const f32 = new Float32Array(buf);
       const u32 = new Uint32Array(buf);
       for (let i = 0; i < shapeCount; i++) {
-        const s = shapes[i];
+        const s = sorted[i];
         const off = i * 8;
         f32[off + 0] = s.position[0];
         f32[off + 1] = s.position[1];
@@ -484,7 +502,15 @@ export class GPURenderer {
         f32[off + 4] = s.size[0];
         f32[off + 5] = s.size[1];
         f32[off + 6] = s.size[2];
-        f32[off + 7] = 0;
+        const info = layerInfo.get(s.layerId);
+        const mode = info?.mode ?? "union";
+        const opacity = info?.opacity ?? 1;
+        const param = info?.param ?? 0.5;
+        // Pack: bits 0-7 = mode, bits 8-19 = opacity*4095, bits 20-31 = param*4095
+        u32[off + 7] =
+          (TRANSFER_MODE_GPU[mode] & 0xFF) |
+          ((Math.round(opacity * 4095) & 0xFFF) << 8) |
+          ((Math.round(param * 4095) & 0xFFF) << 20);
       }
       this.device.queue.writeBuffer(this.shapeBuffer, 0, buf);
     }

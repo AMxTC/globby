@@ -11,7 +11,10 @@
   --color-accent-foreground: oklch(0.6559 0.2639 0);
   --color-border: oklch(0.922 0 0);
   --color-ring: oklch(0.708 0 0);
-  --radius-sm: 0.375rem;
+  --color-primary: oklch(0.6559 0.2639 0);
+  --color-primary-foreground: oklch(1 0 0);
+  --color-destructive: oklch(0.577 0.245 27.325);
+  --radius-sm: 0.175rem;
   --radius-md: 0.5rem;
   --radius-lg: 0.75rem;
   --radius-xl: 1rem;
@@ -26,13 +29,13 @@
   --color-accent-foreground: oklch(0.6559 0.2639 0);
   --color-border: oklch(0.369 0 0);
   --color-ring: oklch(0.556 0 0);
+  --color-primary: oklch(0.6559 0.2639 0);
+  --color-primary-foreground: oklch(0.145 0 0);
+  --color-destructive: oklch(0.577 0.245 27.325);
 }
 
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
-}
+/* Tailwind preflight handles box-sizing and margin resets.
+   Avoid `* { padding: 0 }` — it overrides Tailwind utility padding. */
 
 body {
   overflow: hidden;
