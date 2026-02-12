@@ -34,15 +34,6 @@ export interface DragState {
   previewSize: Vec3;
 }
 
-export interface GizmoDrag {
-  active: boolean;
-  axis: "x" | "y" | "z";
-  shapeId: string;
-  startMousePos: Vec3;
-  startShapePos: Vec3;
-  previewPos: Vec3;
-}
-
 export const sceneState = proxy({
   shapes: [] as SDFShape[],
   layers: [
@@ -51,16 +42,9 @@ export const sceneState = proxy({
   activeLayerId: "1" as string,
   activeTool: "select" as "select" | ShapeType,
   selectedShapeId: null as string | null,
+  editMode: "object" as "object" | "edit",
   showDebugChunks: false,
   showGroundPlane: true,
-  gizmoDrag: {
-    active: false,
-    axis: "x" as "x" | "y" | "z",
-    shapeId: "",
-    startMousePos: [0, 0, 0] as Vec3,
-    startShapePos: [0, 0, 0] as Vec3,
-    previewPos: [0, 0, 0] as Vec3,
-  } as GizmoDrag,
   drag: {
     active: false,
     phase: "idle",
@@ -400,6 +384,7 @@ function resetDrag() {
 
 export function selectShape(id: string | null) {
   sceneState.selectedShapeId = id;
+  sceneState.editMode = "object";
 }
 
 export function deleteSelectedShape() {
@@ -422,38 +407,22 @@ export function moveShape(id: string, newPosition: Vec3) {
   sceneState.version++;
 }
 
-export function startGizmoDrag(
-  axis: "x" | "y" | "z",
-  shapeId: string,
-  mousePos: Vec3,
-  shapePos: Vec3,
-) {
-  sceneState.gizmoDrag.active = true;
-  sceneState.gizmoDrag.axis = axis;
-  sceneState.gizmoDrag.shapeId = shapeId;
-  sceneState.gizmoDrag.startMousePos = mousePos;
-  sceneState.gizmoDrag.startShapePos = shapePos;
-  sceneState.gizmoDrag.previewPos = [...shapePos] as Vec3;
+export function scaleShape(id: string, newSize: Vec3, newPosition?: Vec3) {
+  const shape = sceneState.shapes.find((s) => s.id === id);
+  if (!shape) return;
+  pushUndo();
+  shape.size = newSize;
+  if (newPosition) shape.position = newPosition;
+  sceneState.version++;
 }
 
-export function updateGizmoDrag(previewPos: Vec3) {
-  sceneState.gizmoDrag.previewPos = previewPos;
+export function enterEditMode() {
+  if (!sceneState.selectedShapeId) return;
+  sceneState.editMode = "edit";
 }
 
-export function commitGizmoDrag() {
-  if (!sceneState.gizmoDrag.active) return;
-  const { shapeId, previewPos } = sceneState.gizmoDrag;
-  moveShape(shapeId, [...previewPos] as Vec3);
-  resetGizmoDrag();
-}
-
-export function cancelGizmoDrag() {
-  resetGizmoDrag();
-}
-
-function resetGizmoDrag() {
-  sceneState.gizmoDrag.active = false;
-  sceneState.gizmoDrag.shapeId = "";
+export function exitEditMode() {
+  sceneState.editMode = "object";
 }
 
 // Non-proxied refs for Three.js objects (valtio proxy would break them)
@@ -462,9 +431,15 @@ export const sceneRefs: {
   controls:
     | import("three/examples/jsm/controls/OrbitControls.js").OrbitControls
     | null;
+  canvas: HTMLCanvasElement | null;
+  updateGizmoOverlay:
+    | ((vpMat: import("three").Matrix4, w: number, h: number) => void)
+    | null;
 } = {
   camera: null,
   controls: null,
+  canvas: null,
+  updateGizmoOverlay: null,
 };
 
 declare global {

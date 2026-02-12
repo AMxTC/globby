@@ -29,8 +29,9 @@ hotkeys in one place, like in blobby (/Users/alasdair/Documents/GitHub/blobby/sr
 
 ## Undo/Redo System
 
-## edit shapes (edit base of recangle, push pull top)
+## Edit tools
 
-## extruded polygon tool
-
-## push pull side faces of shapes
+- swap from the 3d rendered gizmo to svg overlays (use same 3D math to position them)
+- the 3d gizmo should also allow for rotation and scaling
+- single click to show the gizmo ('object mode')
+- double click to enter edit shape ('edit mode') (e.g. show control points for rectangle's base, and a height control for the extrusion amount)

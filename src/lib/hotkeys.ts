@@ -9,7 +9,8 @@ import {
   selectShape,
   deleteSelectedShape,
   cancelDrag,
-  cancelGizmoDrag,
+  enterEditMode,
+  exitEditMode,
   undo,
   redo,
 } from "../state/sceneStore";
@@ -71,12 +72,25 @@ const HOTKEYS: HotkeyDef[] = [
     description: "Deselect / cancel current action",
     combo: { key: "Escape" },
     action: () => {
-      if (sceneState.gizmoDrag.active) {
-        cancelGizmoDrag();
+      if (sceneState.editMode === "edit") {
+        exitEditMode();
       } else if (sceneState.drag.phase !== "idle") {
         cancelDrag();
       } else {
         selectShape(null);
+      }
+    },
+  },
+  {
+    name: "Tab",
+    description: "Toggle object/edit mode",
+    combo: { key: "Tab" },
+    action: () => {
+      if (!sceneState.selectedShapeId) return;
+      if (sceneState.editMode === "edit") {
+        exitEditMode();
+      } else {
+        enterEditMode();
       }
     },
   },

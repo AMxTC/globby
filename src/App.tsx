@@ -8,6 +8,7 @@ import { createOrbitCamera } from "./gpu/orbit";
 import { setupPointer } from "./gpu/pointer";
 import Toolbar from "./components/Toolbar";
 import LayersPanel from "./components/LayersPanel";
+import GizmoOverlay from "./components/GizmoOverlay";
 import { themeState } from "./state/themeStore";
 import { setupHotkeys } from "./lib/hotkeys";
 
@@ -41,6 +42,7 @@ export default function App() {
 
       sceneRefs.camera = camera;
       sceneRefs.controls = controls;
+      sceneRefs.canvas = canvas!;
 
       const cleanupHotkeys = setupHotkeys();
 
@@ -98,16 +100,14 @@ export default function App() {
           });
         }
 
-        // Show selection wireframe + gizmo axes
+        // Show selection wireframe
         const selectedId = sceneState.selectedShapeId;
         if (selectedId) {
           const shape = sceneState.shapes.find((s) => s.id === selectedId);
           if (shape) {
-            const gizmo = sceneState.gizmoDrag;
-            const showPos: [number, number, number] =
-              gizmo.active && gizmo.shapeId === selectedId
-                ? ([...gizmo.previewPos] as [number, number, number])
-                : ([...shape.position] as [number, number, number]);
+            const showPos: [number, number, number] = [
+              ...shape.position,
+            ] as [number, number, number];
             const showSize: [number, number, number] = [...shape.size] as [
               number,
               number,
@@ -124,33 +124,11 @@ export default function App() {
                   ? [1, 1, 1, 0.6]
                   : [0.1, 0.1, 0.1, 0.6],
             });
-
-            // Gizmo axes: thin elongated boxes
-            const gizmoLen = 0.3;
-            const gizmoThick = 0.005;
-
-            // X axis (red)
-            wireframes.push({
-              center: [showPos[0] + gizmoLen / 2, showPos[1], showPos[2]],
-              halfSize: [gizmoLen / 2, gizmoThick, gizmoThick],
-              color: [1, 0.2, 0.2, 1],
-            });
-
-            // Y axis (green)
-            wireframes.push({
-              center: [showPos[0], showPos[1] + gizmoLen / 2, showPos[2]],
-              halfSize: [gizmoThick, gizmoLen / 2, gizmoThick],
-              color: [0.2, 1, 0.2, 1],
-            });
-
-            // Z axis (blue)
-            wireframes.push({
-              center: [showPos[0], showPos[1], showPos[2] + gizmoLen / 2],
-              halfSize: [gizmoThick, gizmoThick, gizmoLen / 2],
-              color: [0.3, 0.3, 1, 1],
-            });
           }
         }
+
+        // Update SVG gizmo overlay
+        sceneRefs.updateGizmoOverlay?.(viewProjMat, canvas!.clientWidth, canvas!.clientHeight);
 
         // Debug: world bounds (first so it's never dropped) + chunk boundaries
         if (sceneState.showDebugChunks) {
@@ -220,6 +198,7 @@ export default function App() {
         cleanupHotkeys();
         sceneRefs.camera = null;
         sceneRefs.controls = null;
+        sceneRefs.canvas = null;
         controls.dispose();
         renderer.destroy();
       };
@@ -250,8 +229,9 @@ export default function App() {
   }, [version, bake]);
 
   return (
-    <div className="w-screen h-screen">
+    <div className="w-screen h-screen relative">
       <canvas ref={canvasRef} className="w-full h-full block bg-muted" />
+      <GizmoOverlay />
       {snap.showDebugChunks && (
         <pre
           ref={debugHudRef}
