@@ -38,6 +38,7 @@ export const sceneState = proxy({
   activeTool: "select" as "select" | ShapeType,
   selectedShapeId: null as string | null,
   showDebugChunks: false,
+  showGroundPlane: true,
   gizmoDrag: {
     active: false,
     axis: "x" as "x" | "y" | "z",

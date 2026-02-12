@@ -11,7 +11,7 @@ struct Uniforms {
   atlas_slots: vec3<u32>,
   _pad2: u32,
   max_distance: f32,
-  _pad3: f32,
+  show_ground_plane: u32,
   _pad4: f32,
   _pad5: f32,
   world_bounds_min: vec3<f32>,
@@ -141,6 +141,23 @@ fn calcNormal(p: vec3<f32>) -> vec3<f32> {
   return normalize(vec3<f32>(dx, dy, dz));
 }
 
+fn shadowMarch(p: vec3<f32>, light_dir: vec3<f32>) -> f32 {
+  let eps = uniforms.voxel_size * 2.0;
+  var t: f32 = eps;
+  for (var i: i32 = 0; i < 32; i = i + 1) {
+    let sp = p + t * light_dir;
+    let d = sampleChunkSDF(sp);
+    if (d < 0.0) {
+      return 0.0; // in shadow
+    }
+    if (t > 50.0) {
+      return 1.0; // escaped — lit
+    }
+    t = t + max(abs(d), uniforms.voxel_size * 0.5);
+  }
+  return 1.0; // lit
+}
+
 struct FragOutput {
   @location(0) color: vec4<f32>,
   @location(1) world_pos: vec4<f32>,
@@ -243,6 +260,19 @@ fn fs(@builtin(position) frag_coord: vec4<f32>) -> FragOutput {
     } else {
       t = t_next;
       d = d_next;
+    }
+  }
+
+  // Ground plane shadow
+  if (uniforms.show_ground_plane != 0u && rd.y < 0.0) {
+    let t_ground = -ro.y / rd.y;
+    if (t_ground > 0.0) {
+      let ground_pos = ro + t_ground * rd;
+      let lig = normalize(vec3<f32>(1.0, 0.8, -0.2));
+      let shadow = shadowMarch(ground_pos, lig);
+      if (shadow < 0.5) {
+        return FragOutput(vec4<f32>(0.0, 0.0, 0.0, 0.35), vec4<f32>(ground_pos, 1.0));
+      }
     }
   }
 

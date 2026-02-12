@@ -5,6 +5,7 @@ import {
   Cone,
   Cylinder,
   Grid3x3,
+  Layers,
   MousePointer,
   Pyramid,
 } from "lucide-react";
@@ -62,6 +63,17 @@ export default function Toolbar() {
         title="Debug Chunks"
       >
         <Grid3x3 size={20} />
+      </Toggle>
+
+      <Toggle
+        pressed={snap.showGroundPlane}
+        onPressedChange={() => {
+          sceneState.showGroundPlane = !sceneState.showGroundPlane;
+        }}
+        size="icon"
+        title="Ground Shadows"
+      >
+        <Layers size={20} />
       </Toggle>
 
       <div className="w-px h-6 bg-border mx-1" />

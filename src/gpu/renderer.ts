@@ -1,4 +1,4 @@
-import type { SDFShape } from "../state/sceneStore";
+import { sceneState, type SDFShape } from "../state/sceneStore";
 import {
   SHAPE_TYPE_GPU,
   VOXEL_SIZE,
@@ -613,9 +613,9 @@ export class GPURenderer {
     u32[45] = ATLAS_SLOTS[1];
     u32[46] = ATLAS_SLOTS[2];
     u32[47] = 0; // pad
-    // 48: max_distance + 3 pad
+    // 48: max_distance, show_ground_plane, 2 pad
     f32[48] = 100.0;
-    f32[49] = 0;
+    u32[49] = sceneState.showGroundPlane ? 1 : 0;
     f32[50] = 0;
     f32[51] = 0;
     // 52-54: world_bounds_min (vec3<f32>) + pad at 55
