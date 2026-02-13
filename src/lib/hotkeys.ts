@@ -13,6 +13,9 @@ import {
   exitEditMode,
   undo,
   redo,
+  addShape,
+  type Vec3,
+  type SDFShape,
 } from "../state/sceneStore";
 import * as THREE from "three";
 
@@ -41,6 +44,8 @@ function isInputFocused(e: KeyboardEvent): boolean {
   const tag = (e.target as HTMLElement)?.tagName;
   return tag === "INPUT" || tag === "TEXTAREA";
 }
+
+let clipboard: Omit<SDFShape, "id" | "layerId"> | null = null;
 
 const HOTKEYS: HotkeyDef[] = [
   {
@@ -92,6 +97,36 @@ const HOTKEYS: HotkeyDef[] = [
       } else {
         enterEditMode();
       }
+    },
+  },
+  {
+    name: "Copy",
+    description: "Copy selected shape",
+    combo: { key: "c", meta: true },
+    action: () => {
+      const id = sceneState.selectedShapeId;
+      if (!id) return;
+      const shape = sceneState.shapes.find((s) => s.id === id);
+      if (!shape) return;
+      clipboard = {
+        type: shape.type,
+        position: [...shape.position] as Vec3,
+        rotation: [...shape.rotation] as Vec3,
+        size: [...shape.size] as Vec3,
+        scale: shape.scale,
+      };
+    },
+  },
+  {
+    name: "Paste",
+    description: "Paste shape to active layer",
+    combo: { key: "v", meta: true },
+    action: () => {
+      if (!clipboard) return;
+      addShape({ ...clipboard, position: [...clipboard.position] as Vec3, rotation: [...clipboard.rotation] as Vec3, size: [...clipboard.size] as Vec3 });
+      // Select the newly pasted shape (it's the last one)
+      const last = sceneState.shapes[sceneState.shapes.length - 1];
+      if (last) sceneState.selectedShapeId = last.id;
     },
   },
   {
