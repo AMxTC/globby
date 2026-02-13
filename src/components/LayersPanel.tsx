@@ -77,7 +77,7 @@ export default function LayersPanel() {
           size="icon"
           onClick={() => setOpen(true)}
           title="Show Layers"
-          className="bg-accent border-border shadow-md text-muted-foreground"
+          className="bg-accent border-border text-muted-foreground"
         >
           <PanelRightOpen size={18} />
         </Button>
