@@ -7,7 +7,7 @@ import { CHUNK_WORLD_SIZE } from "./constants";
 import { createOrbitCamera } from "./gpu/orbit";
 import { setupPointer } from "./gpu/pointer";
 import Toolbar from "./components/Toolbar";
-import LayersPanel from "./components/LayersPanel";
+import SidePanel from "./components/SidePanel";
 import GizmoOverlay from "./components/GizmoOverlay";
 import { themeState } from "./state/themeStore";
 import { setupHotkeys } from "./lib/hotkeys";
@@ -260,7 +260,7 @@ export default function App() {
         />
       )}
       <Toolbar />
-      <LayersPanel />
+      <SidePanel />
     </div>
   );
 }

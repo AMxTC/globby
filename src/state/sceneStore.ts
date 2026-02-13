@@ -457,6 +457,14 @@ export function scaleShape(id: string, newSize: Vec3, newPosition?: Vec3, newSca
   sceneState.version++;
 }
 
+export function moveShapeToLayer(id: string, layerId: string) {
+  const shape = sceneState.shapes.find((s) => s.id === id);
+  if (!shape) return;
+  pushUndo();
+  shape.layerId = layerId;
+  sceneState.version++;
+}
+
 export function enterEditMode() {
   if (!sceneState.selectedShapeId) return;
   sceneState.editMode = "edit";
