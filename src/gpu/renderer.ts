@@ -1,4 +1,5 @@
 import { sceneState, type SDFShape } from "../state/sceneStore";
+import { eulerToMatrix3 } from "../lib/math3d";
 import {
   SHAPE_TYPE_GPU,
   TRANSFER_MODE_GPU,
@@ -23,26 +24,49 @@ export interface WireframeBox {
   center: [number, number, number];
   halfSize: [number, number, number];
   color: [number, number, number, number];
+  rotation?: [number, number, number];
+  scale?: number;
 }
 
 // 12 edges of a box = 24 vertices (line-list)
 function buildBoxWireframeVerts(
   center: [number, number, number],
   half: [number, number, number],
+  rotation?: [number, number, number],
+  scale?: number,
 ): Float32Array<ArrayBuffer> {
   const [cx, cy, cz] = center;
   const [hx, hy, hz] = half;
 
-  const c = [
-    [cx - hx, cy - hy, cz - hz],
-    [cx + hx, cy - hy, cz - hz],
-    [cx + hx, cy + hy, cz - hz],
-    [cx - hx, cy + hy, cz - hz],
-    [cx - hx, cy - hy, cz + hz],
-    [cx + hx, cy - hy, cz + hz],
-    [cx + hx, cy + hy, cz + hz],
-    [cx - hx, cy + hy, cz + hz],
+  // Local-space corners (centered at origin)
+  const localCorners = [
+    [-hx, -hy, -hz],
+    [+hx, -hy, -hz],
+    [+hx, +hy, -hz],
+    [-hx, +hy, -hz],
+    [-hx, -hy, +hz],
+    [+hx, -hy, +hz],
+    [+hx, +hy, +hz],
+    [-hx, +hy, +hz],
   ];
+
+  const hasRotation = rotation && (rotation[0] !== 0 || rotation[1] !== 0 || rotation[2] !== 0);
+  const s = scale ?? 1;
+
+  let c: number[][];
+  if (hasRotation || s !== 1) {
+    const m = eulerToMatrix3(rotation?.[0] ?? 0, rotation?.[1] ?? 0, rotation?.[2] ?? 0);
+    c = localCorners.map(([lx, ly, lz]) => {
+      const sx = lx * s, sy = ly * s, sz = lz * s;
+      return [
+        cx + m[0] * sx + m[3] * sy + m[6] * sz,
+        cy + m[1] * sx + m[4] * sy + m[7] * sz,
+        cz + m[2] * sx + m[5] * sy + m[8] * sz,
+      ];
+    });
+  } else {
+    c = localCorners.map(([lx, ly, lz]) => [cx + lx, cy + ly, cz + lz]);
+  }
 
   const edges = [
     0, 1, 1, 2, 2, 3, 3, 0,
@@ -206,9 +230,9 @@ export class GPURenderer {
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
 
-    // Shape buffer: MAX_SHAPES * 32 bytes
+    // Shape buffer: MAX_SHAPES * 48 bytes
     this.shapeBuffer = this.device.createBuffer({
-      size: MAX_SHAPES * 32,
+      size: MAX_SHAPES * 48,
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
     });
 
@@ -530,12 +554,12 @@ export class GPURenderer {
 
     // Write shape data once
     if (shapeCount > 0) {
-      const buf = new ArrayBuffer(shapeCount * 32);
+      const buf = new ArrayBuffer(shapeCount * 48);
       const f32 = new Float32Array(buf);
       const u32 = new Uint32Array(buf);
       for (let i = 0; i < shapeCount; i++) {
         const s = sorted[i];
-        const off = i * 8;
+        const off = i * 12; // 48 bytes / 4 = 12 floats per shape
         f32[off + 0] = s.position[0];
         f32[off + 1] = s.position[1];
         f32[off + 2] = s.position[2];
@@ -552,6 +576,10 @@ export class GPURenderer {
           (TRANSFER_MODE_GPU[mode] & 0xFF) |
           ((Math.round(opacity * 4095) & 0xFFF) << 8) |
           ((Math.round(param * 4095) & 0xFFF) << 20);
+        f32[off + 8] = s.rotation[0];
+        f32[off + 9] = s.rotation[1];
+        f32[off + 10] = s.rotation[2];
+        f32[off + 11] = s.scale;
       }
       this.device.queue.writeBuffer(this.shapeBuffer, 0, buf);
     }
@@ -777,7 +805,7 @@ export class GPURenderer {
         const batchVerts = new Float32Array(totalVerts * 3);
         for (let i = 0; i < boxCount; i++) {
           const wf = group.boxes[i];
-          const verts = buildBoxWireframeVerts(wf.center, wf.halfSize);
+          const verts = buildBoxWireframeVerts(wf.center, wf.halfSize, wf.rotation, wf.scale);
           batchVerts.set(verts, i * 24 * 3);
         }
         this.device.queue.writeBuffer(this.linesVertexBuffer, vertexOffset, batchVerts);

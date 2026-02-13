@@ -10,6 +10,8 @@ struct Shape {
   shape_type: u32,
   size: vec3<f32>,
   transfer_packed: u32, // low 16 = mode, high 16 = opacity*1000
+  rotation: vec3<f32>,   // euler angles
+  scale: f32,            // uniform scale
 }
 
 @group(0) @binding(0) var<uniform> params: BakeParams;
@@ -84,6 +86,18 @@ fn smin(a: f32, b: f32, k: f32) -> f32 {
   return mix(b, a, h) - k * h * (1.0 - h);
 }
 
+fn buildInvRotation(euler: vec3<f32>) -> mat3x3<f32> {
+  let cx = cos(euler.x); let sx = sin(euler.x);
+  let cy = cos(euler.y); let sy = sin(euler.y);
+  let cz = cos(euler.z); let sz = sin(euler.z);
+  // R = Rz * Ry * Rx; columns below are the ROWS of R, giving R^T
+  return mat3x3<f32>(
+    vec3<f32>(cy*cz,            sx*sy*cz - cx*sz,   cx*sy*cz + sx*sz),
+    vec3<f32>(cy*sz,            sx*sy*sz + cx*cz,    cx*sy*sz - sx*cz),
+    vec3<f32>(-sy,              sx*cy,               cx*cy),
+  );
+}
+
 const SLOT_SIZE: u32 = 34u;
 
 @compute @workgroup_size(4, 4, 4)
@@ -98,7 +112,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   var closest_raw: f32 = 1e10;
   var closest_id: u32 = 0xFFFFFFFFu;
   for (var i: u32 = 0u; i < params.shape_count; i = i + 1u) {
-    let local_p = world_pos - shapes[i].position;
+    let translated_p = world_pos - shapes[i].position;
+    let inv_rot = buildInvRotation(shapes[i].rotation);
+    let s = shapes[i].scale;
+    let local_p = (inv_rot * translated_p) / s;
     var d_shape: f32;
     switch shapes[i].shape_type {
       case 0u: { d_shape = sdBox(local_p, shapes[i].size); }
@@ -108,6 +125,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
       case 4u: { d_shape = sdCone(local_p, shapes[i].size.y, shapes[i].size.x); }
       default: { d_shape = 1e10; }
     }
+    d_shape = d_shape * s;
 
     // Track closest shape by raw SDF distance (for selection)
     if (abs(d_shape) < closest_raw) {

@@ -6,6 +6,7 @@ import {
   ATLAS_SLOTS,
   CHUNK_MAP_SIZE,
 } from "../constants";
+import { rotatedAABBHalfExtents } from "../lib/math3d";
 
 export interface ChunkSlot {
   cx: number;
@@ -112,14 +113,14 @@ export class ChunkManager {
   private shapeChunks(shape: SDFShape): Set<string> {
     const keys = new Set<string>();
     const [px, py, pz] = shape.position;
-    const [sx, sy, sz] = shape.size;
+    const [hx, hy, hz] = rotatedAABBHalfExtents(shape.size, shape.rotation, shape.scale);
 
-    const minX = Math.floor((px - sx - MARGIN) / CHUNK_WORLD_SIZE);
-    const minY = Math.floor((py - sy - MARGIN) / CHUNK_WORLD_SIZE);
-    const minZ = Math.floor((pz - sz - MARGIN) / CHUNK_WORLD_SIZE);
-    const maxX = Math.floor((px + sx + MARGIN) / CHUNK_WORLD_SIZE);
-    const maxY = Math.floor((py + sy + MARGIN) / CHUNK_WORLD_SIZE);
-    const maxZ = Math.floor((pz + sz + MARGIN) / CHUNK_WORLD_SIZE);
+    const minX = Math.floor((px - hx - MARGIN) / CHUNK_WORLD_SIZE);
+    const minY = Math.floor((py - hy - MARGIN) / CHUNK_WORLD_SIZE);
+    const minZ = Math.floor((pz - hz - MARGIN) / CHUNK_WORLD_SIZE);
+    const maxX = Math.floor((px + hx + MARGIN) / CHUNK_WORLD_SIZE);
+    const maxY = Math.floor((py + hy + MARGIN) / CHUNK_WORLD_SIZE);
+    const maxZ = Math.floor((pz + hz + MARGIN) / CHUNK_WORLD_SIZE);
 
     for (let cz = minZ; cz <= maxZ; cz++) {
       for (let cy = minY; cy <= maxY; cy++) {

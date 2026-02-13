@@ -123,6 +123,8 @@ export default function App() {
                 themeState.theme === "dark"
                   ? [1, 1, 1, 0.6]
                   : [0.1, 0.1, 0.1, 0.6],
+              rotation: [...shape.rotation] as [number, number, number],
+              scale: shape.scale,
             });
           }
         }

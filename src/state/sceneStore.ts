@@ -7,7 +7,9 @@ export interface SDFShape {
   id: string;
   type: ShapeType;
   position: Vec3;
+  rotation: Vec3;   // Euler angles [rx, ry, rz] radians, XYZ intrinsic
   size: Vec3;
+  scale: number;    // Uniform scale (>0), default 1
   layerId: string;
 }
 
@@ -71,7 +73,9 @@ type ShapeSnapshot = {
   id: string;
   type: ShapeType;
   position: Vec3;
+  rotation: Vec3;
   size: Vec3;
+  scale: number;
   layerId: string;
 }[];
 
@@ -91,7 +95,9 @@ function snapshot(): SceneSnapshot {
       id: s.id,
       type: s.type,
       position: [...s.position] as Vec3,
+      rotation: [...s.rotation] as Vec3,
       size: [...s.size] as Vec3,
+      scale: s.scale,
       layerId: s.layerId,
     })),
     layers: sceneState.layers.map((l) => ({ ...l })),
@@ -268,7 +274,9 @@ export function commitRadius() {
     addShape({
       type: "sphere",
       position: [...previewPosition] as Vec3,
+      rotation: [0, 0, 0],
       size: [...previewSize] as Vec3,
+      scale: 1,
     });
   }
 
@@ -360,7 +368,9 @@ export function commitHeight() {
     addShape({
       type: tool as ShapeType,
       position: [...previewPosition] as Vec3,
+      rotation: [0, 0, 0],
       size: [...previewSize] as Vec3,
+      scale: 1,
     });
   }
 
@@ -409,7 +419,9 @@ export function duplicateShape(id: string): string | null {
     id: newId,
     type: shape.type,
     position: [...shape.position] as Vec3,
+    rotation: [...shape.rotation] as Vec3,
     size: [...shape.size] as Vec3,
+    scale: shape.scale,
     layerId: shape.layerId,
   });
   sceneState.selectedShapeId = newId;
@@ -425,12 +437,21 @@ export function moveShape(id: string, newPosition: Vec3) {
   sceneState.version++;
 }
 
-export function scaleShape(id: string, newSize: Vec3, newPosition?: Vec3) {
+export function rotateShape(id: string, newRotation: Vec3) {
+  const shape = sceneState.shapes.find((s) => s.id === id);
+  if (!shape) return;
+  pushUndo();
+  shape.rotation = newRotation;
+  sceneState.version++;
+}
+
+export function scaleShape(id: string, newSize: Vec3, newPosition?: Vec3, newScale?: number) {
   const shape = sceneState.shapes.find((s) => s.id === id);
   if (!shape) return;
   pushUndo();
   shape.size = newSize;
   if (newPosition) shape.position = newPosition;
+  if (newScale !== undefined) shape.scale = newScale;
   sceneState.version++;
 }
 

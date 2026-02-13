@@ -5,14 +5,17 @@ import {
   sceneRefs,
   moveShape,
   scaleShape,
+  rotateShape,
   duplicateShape,
   type Vec3,
   type SDFShape,
 } from "../state/sceneStore";
 import {
   worldToScreen,
-  projectRayOnAxis,
+  projectRayOnAxisDir,
+  projectRayOnPlane,
   gizmoWorldLength,
+  eulerToMatrix3,
 } from "../lib/math3d";
 
 const AXIS_COLORS = { x: "#ef4444", y: "#22c55e", z: "#3b82f6" } as const;
@@ -22,17 +25,43 @@ const ARROW_HEAD_PX = 10;
 const SCALE_HANDLE_SIZE = 8;
 const CP_RADIUS = 5;
 const MIN_SIZE = 0.02;
+const ARC_SAMPLES = 48;
+const ROTATION_SNAP = Math.PI / 2; // 90 degrees
 
 interface DragInfo {
-  kind: "translate" | "scale" | "editFace";
+  kind: "translate" | "scale" | "editFace" | "rotate";
   axis: "x" | "y" | "z";
   axisIdx: number;
   shapeId: string;
   startT: number;
   startPos: Vec3;
   startSize: Vec3;
-  negative?: boolean; // for scale: negative-side handle
+  axisDir: Vec3;         // world-space direction of the dragged local axis
+  startRotation: Vec3;   // for rotation undo
+  startScale: number;    // for scale undo
+  negative?: boolean;    // for scale: negative-side handle
   duplicatedFrom?: string; // set when alt+drag created a duplicate
+  startAngle?: number;   // for rotation drag
+}
+
+/** Compute local axes from shape rotation */
+function getLocalAxes(rotation: Vec3): Vec3[] {
+  const m = eulerToMatrix3(rotation[0], rotation[1], rotation[2]);
+  return [
+    [m[0], m[1], m[2]],  // local X
+    [m[3], m[4], m[5]],  // local Y
+    [m[6], m[7], m[8]],  // local Z
+  ];
+}
+
+/** Transform a local-space offset to world-space position */
+function localToWorld(pos: Vec3, m: number[], s: number, localOffset: Vec3): Vec3 {
+  const lx = localOffset[0] * s, ly = localOffset[1] * s, lz = localOffset[2] * s;
+  return [
+    pos[0] + m[0] * lx + m[3] * ly + m[6] * lz,
+    pos[1] + m[1] * lx + m[4] * ly + m[7] * lz,
+    pos[2] + m[2] * lx + m[5] * ly + m[8] * lz,
+  ];
 }
 
 export default function GizmoOverlay() {
@@ -104,6 +133,34 @@ export default function GizmoOverlay() {
       scaleEls[axis] = { rect, dash };
     }
 
+    // --- Object mode: rotation arcs (1 per axis) ---
+    const rotateEls: Record<
+      string,
+      { path: SVGPathElement; hit: SVGPathElement }
+    > = {};
+    for (const axis of AXES) {
+      const path = createSvgEl("path", {
+        stroke: AXIS_COLORS[axis],
+        "stroke-width": "1.5",
+        fill: "none",
+        opacity: "0.7",
+        "pointer-events": "none",
+      });
+      const hit = createSvgEl("path", {
+        stroke: AXIS_COLORS[axis],
+        "stroke-width": "12",
+        fill: "none",
+        opacity: "0",
+        "pointer-events": "stroke",
+      });
+      hit.dataset.role = "rotate";
+      hit.dataset.axis = axis;
+      addHoverBrightness(hit, [path]);
+      g.appendChild(path);
+      g.appendChild(hit);
+      rotateEls[axis] = { path, hit };
+    }
+
     // --- Edit mode: control points (created dynamically per shape type) ---
     // We pre-allocate max needed (6 for box) and hide extras
     const MAX_CPS = 6;
@@ -154,11 +211,15 @@ export default function GizmoOverlay() {
 
       const isEdit = sceneState.editMode === "edit";
 
+      // Compute local axes from shape rotation
+      const localAxes = getLocalAxes(shape.rotation);
+
       // --- Object mode elements ---
       const showObj = !isEdit;
       for (const axis of AXES) {
         const { line, hit, head } = translateEls[axis];
         const { rect: scaleRect, dash: scaleDash } = scaleEls[axis];
+        const { path: arcPath, hit: arcHit } = rotateEls[axis];
 
         if (!showObj) {
           line.style.display = "none";
@@ -166,10 +227,12 @@ export default function GizmoOverlay() {
           head.style.display = "none";
           scaleRect.style.display = "none";
           scaleDash.style.display = "none";
+          arcPath.style.display = "none";
+          arcHit.style.display = "none";
           continue;
         }
 
-        // Compute 3D endpoint of the arrow along this axis
+        // Compute 3D endpoint of the arrow along local axis
         const axisIdx = axis === "x" ? 0 : axis === "y" ? 1 : 2;
         const armLen = gizmoWorldLength(
           pos,
@@ -179,8 +242,12 @@ export default function GizmoOverlay() {
           camera,
           ARROW_TARGET_PX,
         );
-        const endWorld: Vec3 = [...pos];
-        endWorld[axisIdx] += armLen;
+        const dir = localAxes[axisIdx];
+        const endWorld: Vec3 = [
+          pos[0] + dir[0] * armLen,
+          pos[1] + dir[1] * armLen,
+          pos[2] + dir[2] * armLen,
+        ];
         const [ex, ey, ev] = worldToScreen(endWorld, vpMat, w, h);
 
         if (!ev) {
@@ -216,9 +283,12 @@ export default function GizmoOverlay() {
           `${tipX},${tipY} ${baseX1},${baseY1} ${baseX2},${baseY2}`,
         );
 
-        // Scale handle: opposite side of translate arrow (negative axis)
-        const negWorld: Vec3 = [...pos];
-        negWorld[axisIdx] -= armLen;
+        // Scale handle: opposite side of translate arrow (negative local axis)
+        const negWorld: Vec3 = [
+          pos[0] - dir[0] * armLen,
+          pos[1] - dir[1] * armLen,
+          pos[2] - dir[2] * armLen,
+        ];
         const [sx, sy, sv] = worldToScreen(negWorld, vpMat, w, h);
 
         if (sv) {
@@ -230,6 +300,39 @@ export default function GizmoOverlay() {
         } else {
           scaleRect.style.display = "none";
           scaleDash.style.display = "none";
+        }
+
+        // Rotation arc: circle in the plane perpendicular to this local axis
+        const arcRadius = armLen * 1.15;
+        // Basis vectors for the arc plane: use the other two local axes
+        const basis0 = localAxes[(axisIdx + 1) % 3];
+        const basis1 = localAxes[(axisIdx + 2) % 3];
+
+        let arcD = "M";
+        let allVisible = true;
+        for (let j = 0; j <= ARC_SAMPLES; j++) {
+          const angle = (j / ARC_SAMPLES) * Math.PI * 2;
+          const cs = Math.cos(angle);
+          const sn = Math.sin(angle);
+          const wp: Vec3 = [
+            pos[0] + (basis0[0] * cs + basis1[0] * sn) * arcRadius,
+            pos[1] + (basis0[1] * cs + basis1[1] * sn) * arcRadius,
+            pos[2] + (basis0[2] * cs + basis1[2] * sn) * arcRadius,
+          ];
+          const [apx, apy, apv] = worldToScreen(wp, vpMat, w, h);
+          if (!apv) { allVisible = false; break; }
+          arcD += `${j > 0 ? " L" : ""} ${apx},${apy}`;
+        }
+        arcD += " Z";
+
+        if (allVisible) {
+          arcPath.style.display = "";
+          arcHit.style.display = "";
+          arcPath.setAttribute("d", arcD);
+          arcHit.setAttribute("d", arcD);
+        } else {
+          arcPath.style.display = "none";
+          arcHit.style.display = "none";
         }
       }
 
@@ -282,16 +385,14 @@ export default function GizmoOverlay() {
 
       const axis = target.dataset.axis as "x" | "y" | "z";
       const axisIdx = axis === "x" ? 0 : axis === "y" ? 1 : 2;
-      const startT = projectRayOnAxis(
-        camera,
-        canvas,
-        e.clientX,
-        e.clientY,
-        shape.position,
-        axis,
-      );
+      const localAxes = getLocalAxes(shape.rotation);
+      const axisDir = localAxes[axisIdx];
 
       if (role === "translate") {
+        const startT = projectRayOnAxisDir(
+          camera, canvas, e.clientX, e.clientY, shape.position, axisDir,
+        );
+
         if (e.altKey) {
           const newId = duplicateShape(selectedId);
           if (newId) {
@@ -304,6 +405,9 @@ export default function GizmoOverlay() {
               startT,
               startPos: [...clonedShape!.position] as Vec3,
               startSize: [...clonedShape!.size] as Vec3,
+              axisDir,
+              startRotation: [...clonedShape!.rotation] as Vec3,
+              startScale: clonedShape!.scale,
               duplicatedFrom: selectedId,
             };
           }
@@ -316,9 +420,15 @@ export default function GizmoOverlay() {
             startT,
             startPos: [...shape.position] as Vec3,
             startSize: [...shape.size] as Vec3,
+            axisDir,
+            startRotation: [...shape.rotation] as Vec3,
+            startScale: shape.scale,
           };
         }
       } else if (role === "scale") {
+        const startT = projectRayOnAxisDir(
+          camera, canvas, e.clientX, e.clientY, shape.position, axisDir,
+        );
         const negative = target.dataset.negative === "1";
         dragRef.current = {
           kind: "scale",
@@ -328,9 +438,45 @@ export default function GizmoOverlay() {
           startT,
           startPos: [...shape.position] as Vec3,
           startSize: [...shape.size] as Vec3,
+          axisDir,
+          startRotation: [...shape.rotation] as Vec3,
+          startScale: shape.scale,
           negative,
         };
+      } else if (role === "rotate") {
+        // Compute initial angle by intersecting mouse ray with the rotation plane
+        const planeNormal = axisDir;
+        const hitPoint = projectRayOnPlane(
+          camera, canvas, e.clientX, e.clientY, shape.position, planeNormal,
+        );
+        let startAngle = 0;
+        if (hitPoint) {
+          const basis0 = localAxes[(axisIdx + 1) % 3];
+          const basis1 = localAxes[(axisIdx + 2) % 3];
+          const dx = hitPoint[0] - shape.position[0];
+          const dy = hitPoint[1] - shape.position[1];
+          const dz = hitPoint[2] - shape.position[2];
+          const proj0 = dx * basis0[0] + dy * basis0[1] + dz * basis0[2];
+          const proj1 = dx * basis1[0] + dy * basis1[1] + dz * basis1[2];
+          startAngle = Math.atan2(proj1, proj0);
+        }
+        dragRef.current = {
+          kind: "rotate",
+          axis,
+          axisIdx,
+          shapeId: selectedId,
+          startT: 0,
+          startPos: [...shape.position] as Vec3,
+          startSize: [...shape.size] as Vec3,
+          axisDir,
+          startRotation: [...shape.rotation] as Vec3,
+          startScale: shape.scale,
+          startAngle,
+        };
       } else if (role === "editCp") {
+        const startT = projectRayOnAxisDir(
+          camera, canvas, e.clientX, e.clientY, shape.position, axisDir,
+        );
         const negative = target.dataset.negative === "1";
         dragRef.current = {
           kind: "editFace",
@@ -340,6 +486,9 @@ export default function GizmoOverlay() {
           startT,
           startPos: [...shape.position] as Vec3,
           startSize: [...shape.size] as Vec3,
+          axisDir,
+          startRotation: [...shape.rotation] as Vec3,
+          startScale: shape.scale,
           negative,
         };
       }
@@ -355,22 +504,48 @@ export default function GizmoOverlay() {
       e.preventDefault();
       e.stopPropagation();
 
-      const currentT = projectRayOnAxis(
-        camera,
-        canvas,
-        e.clientX,
-        e.clientY,
-        drag.startPos,
-        drag.axis,
-      );
-      const delta = currentT - drag.startT;
-
       const shape = sceneState.shapes.find((s) => s.id === drag.shapeId);
       if (!shape) return;
 
+      if (drag.kind === "rotate") {
+        // Rotation drag: intersect with rotation plane
+        const hitPoint = projectRayOnPlane(
+          camera, canvas, e.clientX, e.clientY, drag.startPos, drag.axisDir,
+        );
+        if (!hitPoint) return;
+        const localAxes = getLocalAxes(drag.startRotation);
+        const basis0 = localAxes[(drag.axisIdx + 1) % 3];
+        const basis1 = localAxes[(drag.axisIdx + 2) % 3];
+        const dx = hitPoint[0] - drag.startPos[0];
+        const dy = hitPoint[1] - drag.startPos[1];
+        const dz = hitPoint[2] - drag.startPos[2];
+        const proj0 = dx * basis0[0] + dy * basis0[1] + dz * basis0[2];
+        const proj1 = dx * basis1[0] + dy * basis1[1] + dz * basis1[2];
+        const currentAngle = Math.atan2(proj1, proj0);
+        let deltaAngle = currentAngle - (drag.startAngle ?? 0);
+        deltaAngle = Math.atan2(Math.sin(deltaAngle), Math.cos(deltaAngle));
+
+        const newRotation: Vec3 = [...drag.startRotation];
+        newRotation[drag.axisIdx] += deltaAngle;
+        if (e.shiftKey) {
+          newRotation[drag.axisIdx] = Math.round(newRotation[drag.axisIdx] / ROTATION_SNAP) * ROTATION_SNAP;
+        }
+        shape.rotation = newRotation;
+        sceneState.version++;
+        return;
+      }
+
+      const currentT = projectRayOnAxisDir(
+        camera, canvas, e.clientX, e.clientY, drag.startPos, drag.axisDir,
+      );
+      const delta = currentT - drag.startT;
+
       if (drag.kind === "translate") {
-        const newPos: Vec3 = [...drag.startPos];
-        newPos[drag.axisIdx] += delta;
+        const newPos: Vec3 = [
+          drag.startPos[0] + drag.axisDir[0] * delta,
+          drag.startPos[1] + drag.axisDir[1] * delta,
+          drag.startPos[2] + drag.axisDir[2] * delta,
+        ];
         shape.position = newPos;
         sceneState.version++;
       } else if (drag.kind === "scale") {
@@ -391,19 +566,51 @@ export default function GizmoOverlay() {
       const canvas = sceneRefs.canvas;
       if (!camera || !canvas) return;
 
-      const currentT = projectRayOnAxis(
-        camera,
-        canvas,
-        e.clientX,
-        e.clientY,
-        drag.startPos,
-        drag.axis,
+      if (drag.kind === "rotate") {
+        // Compute final rotation
+        const hitPoint = projectRayOnPlane(
+          camera, canvas, e.clientX, e.clientY, drag.startPos, drag.axisDir,
+        );
+        const localAxes = getLocalAxes(drag.startRotation);
+        const basis0 = localAxes[(drag.axisIdx + 1) % 3];
+        const basis1 = localAxes[(drag.axisIdx + 2) % 3];
+        let deltaAngle = 0;
+        if (hitPoint) {
+          const dx = hitPoint[0] - drag.startPos[0];
+          const dy = hitPoint[1] - drag.startPos[1];
+          const dz = hitPoint[2] - drag.startPos[2];
+          const proj0 = dx * basis0[0] + dy * basis0[1] + dz * basis0[2];
+          const proj1 = dx * basis1[0] + dy * basis1[1] + dz * basis1[2];
+          deltaAngle = Math.atan2(proj1, proj0) - (drag.startAngle ?? 0);
+          deltaAngle = Math.atan2(Math.sin(deltaAngle), Math.cos(deltaAngle));
+        }
+        // Restore startRotation, then commit via rotateShape (which pushes undo)
+        const shape = sceneState.shapes.find((s) => s.id === drag.shapeId);
+        if (shape) {
+          shape.rotation = [...drag.startRotation] as Vec3;
+          sceneState.version++;
+        }
+        const newRotation: Vec3 = [...drag.startRotation];
+        newRotation[drag.axisIdx] += deltaAngle;
+        if (e.shiftKey) {
+          newRotation[drag.axisIdx] = Math.round(newRotation[drag.axisIdx] / ROTATION_SNAP) * ROTATION_SNAP;
+        }
+        rotateShape(drag.shapeId, newRotation);
+        dragRef.current = null;
+        return;
+      }
+
+      const currentT = projectRayOnAxisDir(
+        camera, canvas, e.clientX, e.clientY, drag.startPos, drag.axisDir,
       );
       const delta = currentT - drag.startT;
 
       if (drag.kind === "translate") {
-        const newPos: Vec3 = [...drag.startPos];
-        newPos[drag.axisIdx] += delta;
+        const newPos: Vec3 = [
+          drag.startPos[0] + drag.axisDir[0] * delta,
+          drag.startPos[1] + drag.axisDir[1] * delta,
+          drag.startPos[2] + drag.axisDir[2] * delta,
+        ];
         if (drag.duplicatedFrom) {
           // Duplicate drag: undo was already pushed by duplicateShape(), just set final position
           const shape = sceneState.shapes.find((s) => s.id === drag.shapeId);
@@ -420,7 +627,22 @@ export default function GizmoOverlay() {
           }
           moveShape(drag.shapeId, newPos);
         }
-      } else if (drag.kind === "scale" || drag.kind === "editFace") {
+      } else if (drag.kind === "scale") {
+        // Restore original, then commit via scaleShape
+        const shape = sceneState.shapes.find((s) => s.id === drag.shapeId);
+        if (shape) {
+          const origPos: Vec3 = [...drag.startPos];
+          const origSize: Vec3 = [...drag.startSize];
+          shape.position = origPos;
+          shape.size = origSize;
+          shape.scale = drag.startScale;
+          sceneState.version++;
+
+          // Recompute final values
+          const newScale = computeUniformScale(drag, delta);
+          scaleShape(drag.shapeId, origSize, origPos, newScale);
+        }
+      } else if (drag.kind === "editFace") {
         // Restore original, then commit via scaleShape
         const shape = sceneState.shapes.find((s) => s.id === drag.shapeId);
         if (shape) {
@@ -433,11 +655,7 @@ export default function GizmoOverlay() {
           // Recompute final values
           const newPos: Vec3 = [...drag.startPos];
           const newSize: Vec3 = [...drag.startSize];
-          if (drag.kind === "scale") {
-            computeScale(drag, delta, newPos, newSize);
-          } else {
-            computeEditFace(drag, delta, newPos, newSize, shape);
-          }
+          computeEditFace(drag, delta, newPos, newSize, shape);
           scaleShape(drag.shapeId, newSize, newPos);
         }
       }
@@ -534,26 +752,31 @@ interface ControlPointDef {
 }
 
 function getControlPoints(shape: SDFShape): ControlPointDef[] {
-  const { position: pos, size, type } = shape;
+  const { position: pos, size, type, rotation, scale: s } = shape;
+  const m = eulerToMatrix3(rotation[0], rotation[1], rotation[2]);
   const cps: ControlPointDef[] = [];
+
+  function toWorld(localOffset: Vec3): Vec3 {
+    return localToWorld(pos, m, s, localOffset);
+  }
 
   switch (type) {
     case "box":
       // 6 face centers
       for (const axis of AXES) {
         const idx = axis === "x" ? 0 : axis === "y" ? 1 : 2;
-        const posW: Vec3 = [...pos];
-        posW[idx] += size[idx];
-        cps.push({ worldPos: posW, axis, negative: false });
-        const negW: Vec3 = [...pos];
-        negW[idx] -= size[idx];
-        cps.push({ worldPos: negW, axis, negative: true });
+        const posOff: Vec3 = [0, 0, 0];
+        posOff[idx] = size[idx];
+        cps.push({ worldPos: toWorld(posOff), axis, negative: false });
+        const negOff: Vec3 = [0, 0, 0];
+        negOff[idx] = -size[idx];
+        cps.push({ worldPos: toWorld(negOff), axis, negative: true });
       }
       break;
     case "sphere":
       // 1 radius handle on +X
       cps.push({
-        worldPos: [pos[0] + size[0], pos[1], pos[2]],
+        worldPos: toWorld([size[0], 0, 0]),
         axis: "x",
         negative: false,
       });
@@ -561,22 +784,22 @@ function getControlPoints(shape: SDFShape): ControlPointDef[] {
     case "cylinder":
       // Top/bottom caps (Y axis), 2 radius handles on X and Z
       cps.push({
-        worldPos: [pos[0], pos[1] + size[1], pos[2]],
+        worldPos: toWorld([0, size[1], 0]),
         axis: "y",
         negative: false,
       });
       cps.push({
-        worldPos: [pos[0], pos[1] - size[1], pos[2]],
+        worldPos: toWorld([0, -size[1], 0]),
         axis: "y",
         negative: true,
       });
       cps.push({
-        worldPos: [pos[0] + size[0], pos[1], pos[2]],
+        worldPos: toWorld([size[0], 0, 0]),
         axis: "x",
         negative: false,
       });
       cps.push({
-        worldPos: [pos[0], pos[1], pos[2] + size[2]],
+        worldPos: toWorld([0, 0, size[2]]),
         axis: "z",
         negative: false,
       });
@@ -584,12 +807,12 @@ function getControlPoints(shape: SDFShape): ControlPointDef[] {
     case "cone":
       // Apex (top of Y), base radius on X
       cps.push({
-        worldPos: [pos[0], pos[1] + size[1], pos[2]],
+        worldPos: toWorld([0, size[1], 0]),
         axis: "y",
         negative: false,
       });
       cps.push({
-        worldPos: [pos[0] + size[0], pos[1] - size[1], pos[2]],
+        worldPos: toWorld([size[0], -size[1], 0]),
         axis: "x",
         negative: false,
       });
@@ -597,12 +820,12 @@ function getControlPoints(shape: SDFShape): ControlPointDef[] {
     case "pyramid":
       // Apex (top of Y), base size on X
       cps.push({
-        worldPos: [pos[0], pos[1] + size[1], pos[2]],
+        worldPos: toWorld([0, size[1], 0]),
         axis: "y",
         negative: false,
       });
       cps.push({
-        worldPos: [pos[0] + size[0], pos[1] - size[1], pos[2]],
+        worldPos: toWorld([size[0], -size[1], 0]),
         axis: "x",
         negative: false,
       });
@@ -612,24 +835,16 @@ function getControlPoints(shape: SDFShape): ControlPointDef[] {
   return cps;
 }
 
-function computeScale(
-  drag: DragInfo,
-  delta: number,
-  _newPos: Vec3,
-  newSize: Vec3,
-) {
-  const { axisIdx, negative } = drag;
-  // Scale symmetrically about shape center — position stays the same
-  const d = negative ? -delta : delta;
-  newSize[axisIdx] = Math.max(drag.startSize[axisIdx] + d, MIN_SIZE);
+/** Compute new uniform scale from drag delta */
+function computeUniformScale(drag: DragInfo, delta: number): number {
+  const d = drag.negative ? -delta : delta;
+  // Use armLen-like reference: scale relative to startScale
+  return Math.max(drag.startScale + d, 0.01);
 }
 
 function applyScale(drag: DragInfo, delta: number, shape: SDFShape) {
-  const newPos: Vec3 = [...drag.startPos];
-  const newSize: Vec3 = [...drag.startSize];
-  computeScale(drag, delta, newPos, newSize);
-  shape.position = newPos;
-  shape.size = newSize;
+  const newScale = computeUniformScale(drag, delta);
+  shape.scale = newScale;
   sceneState.version++;
 }
 
@@ -665,16 +880,21 @@ function computeEditFace(
   }
 
   // Default: move one face, keep opposite fixed (same as box face drag)
+  // Position shift is along the local axis direction
   if (negative) {
     const newHalf = Math.max(drag.startSize[axisIdx] - delta, MIN_SIZE);
-    const positiveFace = drag.startPos[axisIdx] + drag.startSize[axisIdx];
+    const shift = (drag.startSize[axisIdx] - newHalf) / 2;
     newSize[axisIdx] = newHalf;
-    newPos[axisIdx] = positiveFace - newHalf;
+    newPos[0] = drag.startPos[0] + drag.axisDir[0] * shift * drag.startScale;
+    newPos[1] = drag.startPos[1] + drag.axisDir[1] * shift * drag.startScale;
+    newPos[2] = drag.startPos[2] + drag.axisDir[2] * shift * drag.startScale;
   } else {
     const newHalf = Math.max(drag.startSize[axisIdx] + delta, MIN_SIZE);
-    const negativeFace = drag.startPos[axisIdx] - drag.startSize[axisIdx];
+    const shift = (newHalf - drag.startSize[axisIdx]) / 2;
     newSize[axisIdx] = newHalf;
-    newPos[axisIdx] = negativeFace + newHalf;
+    newPos[0] = drag.startPos[0] + drag.axisDir[0] * shift * drag.startScale;
+    newPos[1] = drag.startPos[1] + drag.axisDir[1] * shift * drag.startScale;
+    newPos[2] = drag.startPos[2] + drag.axisDir[2] * shift * drag.startScale;
   }
 }
 
