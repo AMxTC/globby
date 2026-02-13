@@ -15,6 +15,7 @@ struct Shape {
 @group(0) @binding(0) var<uniform> params: BakeParams;
 @group(0) @binding(1) var<storage, read> shapes: array<Shape>;
 @group(0) @binding(2) var output: texture_storage_3d<r32float, write>;
+@group(0) @binding(3) var output_id: texture_storage_3d<r32uint, write>;
 
 fn sdBox(p: vec3<f32>, size: vec3<f32>) -> f32 {
   let q = abs(p) - size;
@@ -94,6 +95,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let world_pos = params.chunk_origin + (vec3<f32>(gid) - 0.5) * params.voxel_size;
 
   var d: f32 = 1e10;
+  var closest_raw: f32 = 1e10;
+  var closest_id: u32 = 0xFFFFFFFFu;
   for (var i: u32 = 0u; i < params.shape_count; i = i + 1u) {
     let local_p = world_pos - shapes[i].position;
     var d_shape: f32;
@@ -104,6 +107,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
       case 3u: { d_shape = sdPyramid(local_p, shapes[i].size.y, shapes[i].size.x); }
       case 4u: { d_shape = sdCone(local_p, shapes[i].size.y, shapes[i].size.x); }
       default: { d_shape = 1e10; }
+    }
+
+    // Track closest shape by raw SDF distance (for selection)
+    if (abs(d_shape) < closest_raw) {
+      closest_raw = abs(d_shape);
+      closest_id = i;
     }
 
     // Unpack: bits 0-7 = mode, bits 8-19 = opacity*4095, bits 20-31 = param*4095
@@ -146,4 +155,5 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
   let texel = params.atlas_offset + gid;
   textureStore(output, texel, vec4<f32>(d, 0.0, 0.0, 0.0));
+  textureStore(output_id, texel, vec4<u32>(closest_id, 0u, 0u, 0u));
 }

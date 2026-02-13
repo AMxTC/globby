@@ -12,7 +12,7 @@ struct Uniforms {
   _pad2: u32,
   max_distance: f32,
   show_ground_plane: u32,
-  _pad4: f32,
+  render_mode: u32,
   _pad5: f32,
   world_bounds_min: vec3<f32>,
   _pad6: f32,
@@ -27,6 +27,7 @@ const SLOT_SIZE: u32 = 34u;
 @group(0) @binding(2) var chunk_map: texture_3d<i32>;
 @group(0) @binding(3) var chunk_dist: texture_3d<f32>;
 @group(0) @binding(4) var vol_sampler: sampler;
+@group(0) @binding(5) var shape_id_atlas: texture_3d<u32>;
 
 struct VertexOutput {
   @builtin(position) position: vec4<f32>,
@@ -96,6 +97,18 @@ fn sampleChunkSDF(p: vec3<f32>) -> f32 {
   let atlas_uvw = clamped / atlas_size;
 
   return textureSampleLevel(atlas, vol_sampler, atlas_uvw, 0.0).r;
+}
+
+// Sample shape ID from atlas (nearest-neighbor, no interpolation)
+fn sampleShapeId(p: vec3<f32>) -> u32 {
+  let cc = worldToChunkCoord(p);
+  let slot = lookupChunkMap(cc);
+  if (slot < 0) { return 0xFFFFFFFFu; }
+  let atlas_offset = slotToOffset(slot);
+  let chunk_origin = vec3<f32>(cc) * uniforms.chunk_world_size;
+  let local_pos = (p - chunk_origin) / uniforms.voxel_size;
+  let texel = vec3<u32>(vec3<i32>(round(local_pos)) + vec3<i32>(atlas_offset) + vec3<i32>(1));
+  return textureLoad(shape_id_atlas, texel, 0).r;
 }
 
 // Get chunk distance (min |d|) for a chunk coordinate
@@ -242,15 +255,41 @@ fn fs(@builtin(position) frag_coord: vec4<f32>) -> FragOutput {
       }
 
       let hit_pos = ro + t_lo * rd;
-      let nor = calcNormal(hit_pos);
+      let shape_id = sampleShapeId(hit_pos);
+      let pick_data = vec4<f32>(hit_pos, f32(shape_id + 1u));
 
-      let lig = normalize(vec3<f32>(1.0, 0.8, -0.2));
-      let dif = clamp(dot(nor, lig), 0.0, 1.0);
-      let amb = 0.5 + 0.5 * nor.y;
-      var col = vec3<f32>(0.05, 0.1, 0.15) * amb + vec3<f32>(1.0, 0.9, 0.8) * dif;
-      col = sqrt(col);
+      var col: vec3<f32>;
+      switch uniforms.render_mode {
+        case 1u: {
+          // Depth pass: normalized distance
+          let z = clamp(t_lo / uniforms.max_distance, 0.0, 1.0);
+          col = vec3<f32>(1.0 - z);
+        }
+        case 2u: {
+          // Normal pass: remap [-1,1] to [0,1]
+          let nor = calcNormal(hit_pos);
+          col = nor * 0.5 + 0.5;
+        }
+        case 3u: {
+          // Clown pass: hash shape ID to color
+          let h = f32(shape_id) * 2.399963;
+          col = vec3<f32>(
+            sin(h) * 0.4 + 0.6,
+            sin(h + 2.094) * 0.4 + 0.6,
+            sin(h + 4.189) * 0.4 + 0.6,
+          );
+        }
+        default: {
+          // Lit shading
+          let nor = calcNormal(hit_pos);
+          let lig = normalize(vec3<f32>(1.0, 0.8, -0.2));
+          let dif = clamp(dot(nor, lig), 0.0, 1.0);
+          let amb = 0.5 + 0.5 * nor.y;
+          col = sqrt(vec3<f32>(0.05, 0.1, 0.15) * amb + vec3<f32>(1.0, 0.9, 0.8) * dif);
+        }
+      }
 
-      return FragOutput(vec4<f32>(col, 1.0), vec4<f32>(hit_pos, 1.0));
+      return FragOutput(vec4<f32>(col, 1.0), pick_data);
     }
 
     // Accelerate when clearly outside
@@ -271,7 +310,7 @@ fn fs(@builtin(position) frag_coord: vec4<f32>) -> FragOutput {
       let lig = normalize(vec3<f32>(1.0, 0.8, -0.2));
       let shadow = shadowMarch(ground_pos, lig);
       if (shadow < 0.5) {
-        return FragOutput(vec4<f32>(0.0, 0.0, 0.0, 0.35), vec4<f32>(ground_pos, 1.0));
+        return FragOutput(vec4<f32>(0.0, 0.0, 0.0, 0.35), vec4<f32>(ground_pos, 0.0));
       }
     }
   }

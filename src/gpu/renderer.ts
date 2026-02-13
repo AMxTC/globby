@@ -70,8 +70,12 @@ export class GPURenderer {
 
   // Textures
   private atlasTexture!: GPUTexture;
+  private shapeIdAtlasTexture!: GPUTexture;
   private chunkMapTexture!: GPUTexture;
   private chunkDistTexture!: GPUTexture;
+
+  // Shape index → shape ID mapping from last bake
+  private lastBakeShapeIds: string[] = [];
 
   // Pipelines
   private bakePipeline!: GPUComputePipeline;
@@ -166,6 +170,18 @@ export class GPURenderer {
       usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
     });
 
+    // Shape ID atlas: same dimensions, r32uint
+    this.shapeIdAtlasTexture = this.device.createTexture({
+      size: [
+        ATLAS_SLOTS[0] * CHUNK_SLOT_SIZE,
+        ATLAS_SLOTS[1] * CHUNK_SLOT_SIZE,
+        ATLAS_SLOTS[2] * CHUNK_SLOT_SIZE,
+      ],
+      dimension: "3d",
+      format: "r32uint",
+      usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
+    });
+
     // Chunk map: 64³ r32sint
     this.chunkMapTexture = this.device.createTexture({
       size: [CHUNK_MAP_SIZE, CHUNK_MAP_SIZE, CHUNK_MAP_SIZE],
@@ -244,6 +260,15 @@ export class GPURenderer {
             viewDimension: "3d",
           },
         },
+        {
+          binding: 3,
+          visibility: GPUShaderStage.COMPUTE,
+          storageTexture: {
+            access: "write-only",
+            format: "r32uint",
+            viewDimension: "3d",
+          },
+        },
       ],
     });
 
@@ -319,6 +344,11 @@ export class GPURenderer {
           binding: 4,
           visibility: GPUShaderStage.FRAGMENT,
           sampler: { type: "filtering" },
+        },
+        {
+          binding: 5,
+          visibility: GPUShaderStage.FRAGMENT,
+          texture: { sampleType: "uint", viewDimension: "3d" },
         },
       ],
     });
@@ -410,6 +440,7 @@ export class GPURenderer {
         { binding: 2, resource: this.chunkMapTexture.createView() },
         { binding: 3, resource: this.chunkDistTexture.createView() },
         { binding: 4, resource: this.linearSampler },
+        { binding: 5, resource: this.shapeIdAtlasTexture.createView() },
       ],
     });
   }
@@ -431,7 +462,7 @@ export class GPURenderer {
   async pickWorldPos(
     pixelX: number,
     pixelY: number,
-  ): Promise<[number, number, number] | null> {
+  ): Promise<{ worldPos: [number, number, number]; shapeId: string | null } | null> {
     const w = this.worldPosTexture.width;
     const h = this.worldPosTexture.height;
     const x = Math.max(0, Math.min(Math.floor(pixelX), w - 1));
@@ -447,10 +478,17 @@ export class GPURenderer {
 
     await this.pickStagingBuffer.mapAsync(GPUMapMode.READ);
     const data = new Float32Array(this.pickStagingBuffer.getMappedRange(0, 16));
-    const result: [number, number, number] | null =
-      data[3] > 0.5 ? [data[0], data[1], data[2]] : null;
+    const alpha = data[3];
+    const worldPos: [number, number, number] = [data[0], data[1], data[2]];
     this.pickStagingBuffer.unmap();
-    return result;
+
+    if (alpha < 0.5) return null;
+
+    const shapeIdx = Math.round(alpha) - 1;
+    const shapeId = shapeIdx >= 0 && shapeIdx < this.lastBakeShapeIds.length
+      ? this.lastBakeShapeIds[shapeIdx]
+      : null;
+    return { worldPos, shapeId };
   }
 
   bake(shapes: readonly SDFShape[]): void {
@@ -472,6 +510,9 @@ export class GPURenderer {
     });
 
     const shapeCount = Math.min(sorted.length, MAX_SHAPES);
+
+    // Store shape index → ID mapping for pick readback
+    this.lastBakeShapeIds = sorted.slice(0, shapeCount).map(s => s.id);
 
     // Sync chunk manager with current shapes
     const { dirtyChunks, chunkMapData } = this.chunkManager.sync(shapes);
@@ -558,6 +599,7 @@ export class GPURenderer {
 
       const encoder = this.device.createCommandEncoder();
       const atlasView = this.atlasTexture.createView();
+      const shapeIdAtlasView = this.shapeIdAtlasTexture.createView();
       const chunkDistView = this.chunkDistTexture.createView();
 
       const bakeBindGroup = this.device.createBindGroup({
@@ -566,6 +608,7 @@ export class GPURenderer {
           { binding: 0, resource: { buffer: this.bakeParamsBuffer, size: 32 } },
           { binding: 1, resource: { buffer: this.shapeBuffer } },
           { binding: 2, resource: atlasView },
+          { binding: 3, resource: shapeIdAtlasView },
         ],
       });
 
@@ -642,7 +685,7 @@ export class GPURenderer {
     // 48: max_distance, show_ground_plane, 2 pad
     f32[48] = 100.0;
     u32[49] = sceneState.showGroundPlane ? 1 : 0;
-    f32[50] = 0;
+    u32[50] = sceneState.renderMode;
     f32[51] = 0;
     // 52-54: world_bounds_min (vec3<f32>) + pad at 55
     const bmin = this.chunkManager.worldBoundsMin;
@@ -796,6 +839,7 @@ export class GPURenderer {
   destroy(): void {
     this.context?.unconfigure();
     this.atlasTexture?.destroy();
+    this.shapeIdAtlasTexture?.destroy();
     this.chunkMapTexture?.destroy();
     this.chunkDistTexture?.destroy();
     this.worldPosTexture?.destroy();

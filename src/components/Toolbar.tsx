@@ -4,6 +4,7 @@ import {
   Circle,
   Cone,
   Cylinder,
+  Eye,
   Grid3x3,
   Layers,
   MousePointer,
@@ -74,6 +75,24 @@ export default function Toolbar() {
         title="Ground Shadows"
       >
         <Layers size={20} />
+      </Toggle>
+
+      <Toggle
+        pressed={snap.renderMode !== 0}
+        onPressedChange={() => {
+          sceneState.renderMode = ((snap.renderMode + 1) % 4) as 0 | 1 | 2 | 3;
+        }}
+        size="icon"
+        title={["Render: Lit", "Render: Depth", "Render: Normals", "Render: Shape ID"][snap.renderMode]}
+      >
+        <div className="relative">
+          <Eye size={20} />
+          {snap.renderMode !== 0 && (
+            <span className="absolute -top-1 -right-1.5 text-[8px] font-bold leading-none">
+              {["", "Z", "N", "ID"][snap.renderMode]}
+            </span>
+          )}
+        </div>
       </Toggle>
 
       <div className="w-px h-6 bg-border mx-1" />

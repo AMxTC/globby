@@ -5,7 +5,7 @@ import {
   updateHeight, commitHeight,
   startRadiusDrag, updateRadius, commitRadius,
   selectShape, enterEditMode, exitEditMode,
-  type Vec3, type SDFShape,
+  type Vec3,
 } from "../state/sceneStore";
 import type { GPURenderer } from "./renderer";
 
@@ -83,66 +83,6 @@ function getHeightFromRay(
   return baseY + Math.max(t, 0);
 }
 
-// --- SDF distance functions for hit-testing ---
-
-function sdfBox(p: Vec3, center: Vec3, size: Vec3): number {
-  const dx = Math.abs(p[0] - center[0]) - size[0];
-  const dy = Math.abs(p[1] - center[1]) - size[1];
-  const dz = Math.abs(p[2] - center[2]) - size[2];
-  const outside = Math.sqrt(
-    Math.max(dx, 0) ** 2 + Math.max(dy, 0) ** 2 + Math.max(dz, 0) ** 2,
-  );
-  const inside = Math.min(Math.max(dx, dy, dz), 0);
-  return outside + inside;
-}
-
-function sdfSphere(p: Vec3, center: Vec3, size: Vec3): number {
-  const dx = p[0] - center[0];
-  const dy = p[1] - center[1];
-  const dz = p[2] - center[2];
-  return Math.sqrt(dx * dx + dy * dy + dz * dz) - size[0];
-}
-
-function sdfCylinder(p: Vec3, center: Vec3, size: Vec3): number {
-  const dx = p[0] - center[0];
-  const dz = p[2] - center[2];
-  const radialDist = Math.sqrt(dx * dx + dz * dz) - size[0];
-  const halfH = size[1];
-  const verticalDist = Math.abs(p[1] - center[1]) - halfH;
-  const outside = Math.sqrt(
-    Math.max(radialDist, 0) ** 2 + Math.max(verticalDist, 0) ** 2,
-  );
-  const inside = Math.min(Math.max(radialDist, verticalDist), 0);
-  return outside + inside;
-}
-
-function sdfShape(p: Vec3, shape: SDFShape): number {
-  switch (shape.type) {
-    case "sphere":
-      return sdfSphere(p, shape.position, shape.size);
-    case "cylinder":
-    case "cone":
-    case "pyramid":
-      return sdfCylinder(p, shape.position, shape.size);
-    case "box":
-    default:
-      return sdfBox(p, shape.position, shape.size);
-  }
-}
-
-function findClosestShape(worldPos: Vec3): SDFShape | null {
-  let bestShape: SDFShape | null = null;
-  let bestDist = 0.15; // threshold — must be within 0.15 units
-  for (const shape of sceneState.shapes) {
-    const d = sdfShape(worldPos, shape);
-    if (d < bestDist) {
-      bestDist = d;
-      bestShape = shape;
-    }
-  }
-  return bestShape;
-}
-
 export function setupPointer(
   canvas: HTMLCanvasElement,
   camera: PerspectiveCamera,
@@ -169,10 +109,9 @@ export function setupPointer(
 
       const renderer = getRenderer();
       if (renderer) {
-        renderer.pickWorldPos(pixelX, pixelY).then((worldPos) => {
-          if (worldPos) {
-            const closest = findClosestShape(worldPos as Vec3);
-            selectShape(closest ? closest.id : null);
+        renderer.pickWorldPos(pixelX, pixelY).then((result) => {
+          if (result) {
+            selectShape(result.shapeId);
           } else {
             selectShape(null);
           }
@@ -203,17 +142,17 @@ export function setupPointer(
 
       const renderer = getRenderer();
       if (renderer) {
-        renderer.pickWorldPos(pixelX, pixelY).then((worldPos) => {
+        renderer.pickWorldPos(pixelX, pixelY).then((result) => {
           // If drag was cancelled while we were waiting, bail
           if (sceneState.drag.phase !== "idle" || !isShapeTool(sceneState.activeTool)) return;
 
           let point: Vec3;
           let floorY: number;
 
-          if (worldPos) {
+          if (result) {
             // Hit a shape surface — place on top
-            point = [worldPos[0], worldPos[1], worldPos[2]];
-            floorY = worldPos[1];
+            point = [result.worldPos[0], result.worldPos[1], result.worldPos[2]];
+            floorY = result.worldPos[1];
           } else {
             // No shape hit — use floor plane
             if (!floorHit) {

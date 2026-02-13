@@ -35,3 +35,11 @@ hotkeys in one place, like in blobby (/Users/alasdair/Documents/GitHub/blobby/sr
 - the 3d gizmo should also allow for rotation and scaling
 - single click to show the gizmo ('object mode')
 - double click to enter edit shape ('edit mode') (e.g. show control points for rectangle's base, and a height control for the extrusion amount)
+
+## Shape selection
+
+- right now we have dual defs (js + wgsl). either put them in one place (so we can maintain more easily) OR ditch the js and use a clown pass for selection.
+
+## Layer filters
+
+- should be able to add some code to a layer. e.g add an `onion` effect or a `grow`. applied to everything in that layer after unioning.
