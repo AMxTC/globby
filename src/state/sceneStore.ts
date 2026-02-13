@@ -400,6 +400,23 @@ export function deleteSelectedShape() {
   }
 }
 
+export function duplicateShape(id: string): string | null {
+  const shape = sceneState.shapes.find((s) => s.id === id);
+  if (!shape) return null;
+  pushUndo();
+  const newId = String(nextId++);
+  sceneState.shapes.push({
+    id: newId,
+    type: shape.type,
+    position: [...shape.position] as Vec3,
+    size: [...shape.size] as Vec3,
+    layerId: shape.layerId,
+  });
+  sceneState.selectedShapeId = newId;
+  sceneState.version++;
+  return newId;
+}
+
 export function moveShape(id: string, newPosition: Vec3) {
   const shape = sceneState.shapes.find((s) => s.id === id);
   if (!shape) return;

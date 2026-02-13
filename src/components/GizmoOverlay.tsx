@@ -5,6 +5,7 @@ import {
   sceneRefs,
   moveShape,
   scaleShape,
+  duplicateShape,
   type Vec3,
   type SDFShape,
 } from "../state/sceneStore";
@@ -31,6 +32,7 @@ interface DragInfo {
   startPos: Vec3;
   startSize: Vec3;
   negative?: boolean; // for scale: negative-side handle
+  duplicatedFrom?: string; // set when alt+drag created a duplicate
 }
 
 export default function GizmoOverlay() {
@@ -290,15 +292,32 @@ export default function GizmoOverlay() {
       );
 
       if (role === "translate") {
-        dragRef.current = {
-          kind: "translate",
-          axis,
-          axisIdx,
-          shapeId: selectedId,
-          startT,
-          startPos: [...shape.position] as Vec3,
-          startSize: [...shape.size] as Vec3,
-        };
+        if (e.altKey) {
+          const newId = duplicateShape(selectedId);
+          if (newId) {
+            const clonedShape = sceneState.shapes.find((s) => s.id === newId);
+            dragRef.current = {
+              kind: "translate",
+              axis,
+              axisIdx,
+              shapeId: newId,
+              startT,
+              startPos: [...clonedShape!.position] as Vec3,
+              startSize: [...clonedShape!.size] as Vec3,
+              duplicatedFrom: selectedId,
+            };
+          }
+        } else {
+          dragRef.current = {
+            kind: "translate",
+            axis,
+            axisIdx,
+            shapeId: selectedId,
+            startT,
+            startPos: [...shape.position] as Vec3,
+            startSize: [...shape.size] as Vec3,
+          };
+        }
       } else if (role === "scale") {
         const negative = target.dataset.negative === "1";
         dragRef.current = {
@@ -385,13 +404,22 @@ export default function GizmoOverlay() {
       if (drag.kind === "translate") {
         const newPos: Vec3 = [...drag.startPos];
         newPos[drag.axisIdx] += delta;
-        // Restore original position first, then use moveShape (which pushes undo)
-        const shape = sceneState.shapes.find((s) => s.id === drag.shapeId);
-        if (shape) {
-          shape.position = [...drag.startPos] as Vec3;
-          sceneState.version++;
+        if (drag.duplicatedFrom) {
+          // Duplicate drag: undo was already pushed by duplicateShape(), just set final position
+          const shape = sceneState.shapes.find((s) => s.id === drag.shapeId);
+          if (shape) {
+            shape.position = newPos;
+            sceneState.version++;
+          }
+        } else {
+          // Normal drag: restore original position, then use moveShape (which pushes undo)
+          const shape = sceneState.shapes.find((s) => s.id === drag.shapeId);
+          if (shape) {
+            shape.position = [...drag.startPos] as Vec3;
+            sceneState.version++;
+          }
+          moveShape(drag.shapeId, newPos);
         }
-        moveShape(drag.shapeId, newPos);
       } else if (drag.kind === "scale" || drag.kind === "editFace") {
         // Restore original, then commit via scaleShape
         const shape = sceneState.shapes.find((s) => s.id === drag.shapeId);
