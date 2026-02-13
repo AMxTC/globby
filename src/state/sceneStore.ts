@@ -37,7 +37,9 @@ export interface DragState {
 }
 
 export const sceneState = proxy({
-  shapes: [] as SDFShape[],
+  shapes: [
+    { id: "1", type: "box", position: [0, 0.5, 0] as Vec3, rotation: [0, 0, 0] as Vec3, size: [0.5, 0.5, 0.5] as Vec3, scale: 1, layerId: "1" },
+  ] as SDFShape[],
   layers: [
     { id: "1", name: "Layer 1", transferMode: "union", opacity: 1, transferParam: 0.5, visible: true },
   ] as Layer[],
@@ -61,10 +63,10 @@ export const sceneState = proxy({
     previewPosition: [0, 0, 0] as Vec3,
     previewSize: [0.01, 0.01, 0.01] as Vec3,
   } as DragState,
-  version: 0,
+  version: 1,
 });
 
-let nextId = 1;
+let nextId = 2; // Shape "1" (default cube) already exists
 let nextLayerId = 2; // Layer "1" already exists
 
 // --- Undo/Redo ---

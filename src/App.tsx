@@ -55,6 +55,9 @@ export default function App() {
 
       rendererRef.current = renderer;
 
+      // Bake initial shapes (the version-based effect may have already fired before init completed)
+      renderer.bake(sceneState.shapes as SDFShape[]);
+
       function onResize() {
         const d = window.devicePixelRatio;
         const w = canvas!.clientWidth * d;
