@@ -49,7 +49,7 @@ export const sceneState = proxy({
   editMode: "object" as "object" | "edit",
   showDebugChunks: false,
   showGroundPlane: true,
-  renderMode: 0 as 0 | 1 | 2 | 3, // 0=lit, 1=depth, 2=normals, 3=shape ID
+  renderMode: 0 as 0 | 1 | 2 | 3 | 4, // 0=lit, 1=depth, 2=normals, 3=shape ID, 4=iterations
   drag: {
     active: false,
     phase: "idle",

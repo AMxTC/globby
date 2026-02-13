@@ -69,9 +69,24 @@ export default function App() {
       window.addEventListener("resize", onResize);
 
       const viewProjMat = new Matrix4();
+      let lastFrameTime = performance.now();
+      let fps = 0;
+      let frameCount = 0;
+      let fpsAccum = 0;
 
       function frame() {
         if (destroyed) return;
+
+        const now = performance.now();
+        const dt = now - lastFrameTime;
+        lastFrameTime = now;
+        frameCount++;
+        fpsAccum += dt;
+        if (fpsAccum >= 500) {
+          fps = Math.round((frameCount / fpsAccum) * 1000);
+          frameCount = 0;
+          fpsAccum = 0;
+        }
 
         controls.update();
 
@@ -176,6 +191,7 @@ export default function App() {
           if (hud) {
             const atLimit = stats.used >= stats.max;
             hud.textContent =
+              `FPS: ${fps}\n` +
               `Chunks: ${stats.used} / ${stats.max}${atLimit ? " (LIMIT)" : ""}\n` +
               `Bounds: ${bSize[0].toFixed(1)} x ${bSize[1].toFixed(1)} x ${bSize[2].toFixed(1)}`;
             if (atLimit) hud.style.color = "#ff4444";

@@ -86,6 +86,11 @@ fn sampleChunkSDF(p: vec3<f32>) -> f32 {
     return 1e10;
   }
 
+  return sampleChunkSDFDirect(p, cc, slot);
+}
+
+// Sample SDF when chunk coord and slot are already known (avoids redundant lookups)
+fn sampleChunkSDFDirect(p: vec3<f32>, cc: vec3<i32>, slot: i32) -> f32 {
   let atlas_offset = vec3<f32>(slotToOffset(slot));
   let chunk_origin = vec3<f32>(cc) * uniforms.chunk_world_size;
   let local_pos = (p - chunk_origin) / uniforms.voxel_size;
@@ -148,9 +153,19 @@ fn stepToNextChunkBoundary(p: vec3<f32>, rd: vec3<f32>) -> f32 {
 
 fn calcNormal(p: vec3<f32>) -> vec3<f32> {
   let eps = uniforms.voxel_size;
-  let dx = sampleChunkSDF(p + vec3<f32>(eps, 0.0, 0.0)) - sampleChunkSDF(p - vec3<f32>(eps, 0.0, 0.0));
-  let dy = sampleChunkSDF(p + vec3<f32>(0.0, eps, 0.0)) - sampleChunkSDF(p - vec3<f32>(0.0, eps, 0.0));
-  let dz = sampleChunkSDF(p + vec3<f32>(0.0, 0.0, eps)) - sampleChunkSDF(p - vec3<f32>(0.0, 0.0, eps));
+  // Cache chunk lookup — all 6 sample points are within one voxel of p,
+  // so they're almost certainly in the same chunk
+  let cc = worldToChunkCoord(p);
+  let slot = lookupChunkMap(cc);
+  if (slot < 0) {
+    return vec3<f32>(0.0, 1.0, 0.0);
+  }
+  let dx = sampleChunkSDFDirect(p + vec3<f32>(eps, 0.0, 0.0), cc, slot)
+         - sampleChunkSDFDirect(p - vec3<f32>(eps, 0.0, 0.0), cc, slot);
+  let dy = sampleChunkSDFDirect(p + vec3<f32>(0.0, eps, 0.0), cc, slot)
+         - sampleChunkSDFDirect(p - vec3<f32>(0.0, eps, 0.0), cc, slot);
+  let dz = sampleChunkSDFDirect(p + vec3<f32>(0.0, 0.0, eps), cc, slot)
+         - sampleChunkSDFDirect(p - vec3<f32>(0.0, 0.0, eps), cc, slot);
   return normalize(vec3<f32>(dx, dy, dz));
 }
 
@@ -205,16 +220,17 @@ fn fs(@builtin(position) frag_coord: vec4<f32>) -> FragOutput {
     return FragOutput(vec4<f32>(bg_color, 0.0), no_hit);
   }
 
-  let t_near = max(t_hit.x, 0.0);
+  let t_near = max(t_hit.x, 0.0) + uniforms.voxel_size * 0.01;
   let t_far = t_hit.y;
 
   let voxel_size = uniforms.voxel_size;
   let step_size = voxel_size * 0.5;
   var t: f32 = t_near;
-  var d: f32 = sampleChunkSDF(ro + t_near * rd);
+  var iter: i32 = 0;
 
   for (var i: i32 = 0; i < 512; i = i + 1) {
     if (t > t_far) { break; }
+    iter = i;
 
     let p = ro + t * rd;
     let cc = worldToChunkCoord(p);
@@ -223,30 +239,36 @@ fn fs(@builtin(position) frag_coord: vec4<f32>) -> FragOutput {
     if (slot < 0) {
       // Empty chunk — skip to next chunk boundary
       t = t + stepToNextChunkBoundary(p, rd);
-      d = sampleChunkSDF(ro + t * rd);
       continue;
     }
 
-    // Sphere trace when far from surface
-    if (abs(d) > voxel_size * 4.0) {
-      t = t + abs(d) * 0.9;
-      d = sampleChunkSDF(ro + t * rd);
+    // Occupied chunk — check if surface is far from entire chunk
+    let chunk_min_dist = getChunkDist(cc);
+    if (chunk_min_dist > voxel_size * 4.0) {
+      // No surface near this chunk — skip it entirely
+      t = t + stepToNextChunkBoundary(p, rd);
       continue;
     }
 
-    // Fine step and check for zero-crossing
-    let t_next = t + step_size;
+    // Sample SDF at current point (reuse known slot — avoids redundant chunk lookup)
+    let d = sampleChunkSDFDirect(p, cc, slot);
+
+    // Adaptive step: use SDF distance when safe, fall back to fine step near surface
+    let adaptive_step = max(abs(d) * 0.9, step_size);
+    let t_next = t + adaptive_step;
     if (t_next > t_far) { break; }
 
+    // t_next may cross into a different chunk, so use full lookup
     let d_next = sampleChunkSDF(ro + t_next * rd);
 
     if (d >= 0.0 && d_next < 0.0) {
-      // Bisection refinement between t and t_next
+      // Bisection refinement between t and t_next (reuse chunk slot —
+      // the interval is half a voxel so all midpoints are in the same chunk)
       var t_lo = t;
       var t_hi = t_next;
       for (var j: i32 = 0; j < 8; j = j + 1) {
         let t_mid = (t_lo + t_hi) * 0.5;
-        let d_mid = sampleChunkSDF(ro + t_mid * rd);
+        let d_mid = sampleChunkSDFDirect(ro + t_mid * rd, cc, slot);
         if (d_mid < 0.0) {
           t_hi = t_mid;
         } else {
@@ -279,6 +301,15 @@ fn fs(@builtin(position) frag_coord: vec4<f32>) -> FragOutput {
             sin(h + 4.189) * 0.4 + 0.6,
           );
         }
+        case 4u: {
+          // Iteration heatmap: blue(0) -> green(128) -> red(256+)
+          let heat = clamp(f32(iter) / 256.0, 0.0, 1.0);
+          if (heat < 0.5) {
+            col = mix(vec3<f32>(0.0, 0.0, 1.0), vec3<f32>(0.0, 1.0, 0.0), heat * 2.0);
+          } else {
+            col = mix(vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(1.0, 0.0, 0.0), (heat - 0.5) * 2.0);
+          }
+        }
         default: {
           // Lit shading
           let nor = calcNormal(hit_pos);
@@ -292,14 +323,19 @@ fn fs(@builtin(position) frag_coord: vec4<f32>) -> FragOutput {
       return FragOutput(vec4<f32>(col, 1.0), pick_data);
     }
 
-    // Accelerate when clearly outside
-    if (d_next > voxel_size * 4.0) {
-      t = t_next + abs(d_next) * 0.9;
-      d = sampleChunkSDF(ro + t * rd);
+    t = t_next;
+  }
+
+  // Iteration heatmap for miss rays
+  if (uniforms.render_mode == 4u) {
+    let heat = clamp(f32(iter) / 256.0, 0.0, 1.0);
+    var miss_col: vec3<f32>;
+    if (heat < 0.5) {
+      miss_col = mix(vec3<f32>(0.0, 0.0, 1.0), vec3<f32>(0.0, 1.0, 0.0), heat * 2.0);
     } else {
-      t = t_next;
-      d = d_next;
+      miss_col = mix(vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(1.0, 0.0, 0.0), (heat - 0.5) * 2.0);
     }
+    return FragOutput(vec4<f32>(miss_col, 1.0), no_hit);
   }
 
   // Ground plane shadow

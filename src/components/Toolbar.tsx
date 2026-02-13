@@ -80,16 +80,16 @@ export default function Toolbar() {
       <Toggle
         pressed={snap.renderMode !== 0}
         onPressedChange={() => {
-          sceneState.renderMode = ((snap.renderMode + 1) % 4) as 0 | 1 | 2 | 3;
+          sceneState.renderMode = ((snap.renderMode + 1) % 5) as 0 | 1 | 2 | 3 | 4;
         }}
         size="icon"
-        title={["Render: Lit", "Render: Depth", "Render: Normals", "Render: Shape ID"][snap.renderMode]}
+        title={["Render: Lit", "Render: Depth", "Render: Normals", "Render: Shape ID", "Render: Iterations"][snap.renderMode]}
       >
         <div className="relative">
           <Eye size={20} />
           {snap.renderMode !== 0 && (
             <span className="absolute -top-1 -right-1.5 text-[8px] font-bold leading-none">
-              {["", "Z", "N", "ID"][snap.renderMode]}
+              {["", "Z", "N", "ID", "It"][snap.renderMode]}
             </span>
           )}
         </div>
