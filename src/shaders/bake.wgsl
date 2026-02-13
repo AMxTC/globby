@@ -39,8 +39,8 @@ fn sdCylinder(p: vec3<f32>, h: f32, r: f32) -> f32 {
 }
 
 fn sdCone(p: vec3<f32>, h: f32, r: f32) -> f32 {
-  let q = vec2<f32>(r, -h);
-  let w = vec2<f32>(length(p.xz), p.y);
+  let q = vec2<f32>(r, -2.*h);
+  let w = vec2<f32>(length(p.xz), p.y - h);
   let a = w - q * clamp(dot(w, q) / dot(q, q), 0.0, 1.0);
   let b = w - q * vec2<f32>(clamp(w.x / q.x, 0.0, 1.0), 1.0);
   let k = sign(q.y);
