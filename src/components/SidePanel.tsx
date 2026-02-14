@@ -3,6 +3,7 @@ import { useSnapshot } from "valtio";
 import {
   ChevronUp,
   ChevronDown,
+  ChevronRight,
   Plus,
   Trash2,
   Layers,
@@ -11,6 +12,7 @@ import {
   Eye,
   EyeOff,
   SlidersHorizontal,
+  SquareFunction,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "./ui/button";
@@ -31,7 +33,10 @@ import {
   moveShape,
   rotateShape,
   scaleShape,
+  setShapeFx,
+  setLayerFx,
 } from "../state/sceneStore";
+import { FxEditor } from "./FxEditor";
 import type { Layer, Vec3 } from "../state/sceneStore";
 import type { TransferMode, ShapeType } from "../constants";
 
@@ -56,12 +61,73 @@ const MODE_PARAM: Partial<Record<TransferMode, string>> = {
 const MIN_SECTION_HEIGHT = 120;
 const DEG = Math.PI / 180;
 
+function FxSection({
+  enabled,
+  onToggle,
+  expanded,
+  onToggleExpand,
+  code,
+  onChange,
+  error,
+  compiling,
+}: {
+  enabled: boolean;
+  onToggle: () => void;
+  expanded: boolean;
+  onToggleExpand: () => void;
+  code: string;
+  onChange: (code: string) => void;
+  error: string | null;
+  compiling?: boolean;
+}) {
+  return (
+    <div>
+      <div className="flex items-center gap-1">
+        <button
+          className={cn(
+            "flex items-center gap-1 text-[11px] transition-colors",
+            enabled
+              ? "text-primary"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+          onClick={onToggle}
+          title={enabled ? "Disable Fx" : "Enable Fx"}
+        >
+          <SquareFunction size={14} />
+          <span>Fx</span>
+        </button>
+        {compiling && (
+          <span className="text-[10px] text-muted-foreground animate-pulse ml-1">compiling...</span>
+        )}
+        <button
+          className="p-0.5 rounded-sm text-muted-foreground hover:text-foreground transition-colors ml-auto"
+          onClick={onToggleExpand}
+        >
+          <ChevronRight size={12} className={cn("transition-transform", expanded && "rotate-90")} />
+        </button>
+      </div>
+      {expanded && (
+        <div className="mt-1">
+          <FxEditor
+            code={code}
+            onChange={onChange}
+            error={error}
+            readOnly={!enabled}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function SidePanel() {
   const snap = useSnapshot(sceneState);
   const [open, setOpen] = useState(true);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [topHeight, setTopHeight] = useState<number | null>(null); // null = 50%
+  const [showLayerFx, setShowLayerFx] = useState(false);
+  const [showShapeFx, setShowShapeFx] = useState(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const draggingDivider = useRef(false);
@@ -219,6 +285,17 @@ export default function SidePanel() {
                 />
               </div>
             )}
+            {/* Layer Fx */}
+            <FxSection
+              enabled={activeLayer.fx != null}
+              onToggle={() => setLayerFx(activeLayer.id, activeLayer.fx != null ? undefined : "return distance;")}
+              expanded={showLayerFx}
+              onToggleExpand={() => setShowLayerFx(!showLayerFx)}
+              code={activeLayer.fx ?? "return distance;"}
+              onChange={(c) => setLayerFx(activeLayer.id, c)}
+              error={snap.fxError}
+              compiling={snap.fxCompiling}
+            />
           </div>
         )}
 
@@ -371,6 +448,10 @@ export default function SidePanel() {
               scale={selectedShape.scale}
               layerId={selectedShape.layerId}
               layers={snap.layers as Layer[]}
+              fx={selectedShape.fx}
+              fxError={snap.fxError}
+              showShapeFx={showShapeFx}
+              onToggleShapeFx={() => setShowShapeFx(!showShapeFx)}
             />
           ) : (
             <div className="flex items-center justify-center h-full text-[11px] text-muted-foreground">
@@ -465,6 +546,10 @@ function PropertiesContent({
   scale,
   layerId,
   layers,
+  fx,
+  fxError,
+  showShapeFx,
+  onToggleShapeFx,
 }: {
   shapeId: string;
   shapeType: ShapeType;
@@ -474,6 +559,10 @@ function PropertiesContent({
   scale: number;
   layerId: string;
   layers: Layer[];
+  fx?: string;
+  fxError: string | null;
+  showShapeFx: boolean;
+  onToggleShapeFx: () => void;
 }) {
   const params = SHAPE_PARAMS[shapeType];
 
@@ -595,6 +684,17 @@ function PropertiesContent({
           />
         </div>
       </div>
+
+      {/* Shape Fx */}
+      <FxSection
+        enabled={fx != null}
+        onToggle={() => setShapeFx(shapeId, fx != null ? undefined : "return distance;")}
+        expanded={showShapeFx}
+        onToggleExpand={onToggleShapeFx}
+        code={fx ?? "return distance;"}
+        onChange={(c) => setShapeFx(shapeId, c)}
+        error={fxError}
+      />
     </div>
   );
 }

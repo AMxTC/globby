@@ -224,4 +224,9 @@ export class ChunkManager {
   getMaxChunks(): number {
     return TOTAL_SLOTS;
   }
+
+  /** Mark all allocated chunks as dirty so they get rebaked */
+  markAllDirty(): void {
+    this.dirtyChunks = [...this.chunks.values()];
+  }
 }

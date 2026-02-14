@@ -11,6 +11,7 @@ export interface SDFShape {
   size: Vec3;
   scale: number;    // Uniform scale (>0), default 1
   layerId: string;
+  fx?: string;      // WGSL function body, undefined = identity
 }
 
 export interface Layer {
@@ -20,6 +21,7 @@ export interface Layer {
   opacity: number; // 0..1
   transferParam: number; // 0..1, mode-specific parameter
   visible: boolean;
+  fx?: string;     // WGSL function body, undefined = identity
 }
 
 export interface DragState {
@@ -63,6 +65,8 @@ export const sceneState = proxy({
     previewPosition: [0, 0, 0] as Vec3,
     previewSize: [0.01, 0.01, 0.01] as Vec3,
   } as DragState,
+  fxError: null as string | null,
+  fxCompiling: false,
   version: 1,
 });
 
@@ -79,6 +83,7 @@ type ShapeSnapshot = {
   size: Vec3;
   scale: number;
   layerId: string;
+  fx?: string;
 }[];
 
 interface SceneSnapshot {
@@ -101,6 +106,7 @@ function snapshot(): SceneSnapshot {
       size: [...s.size] as Vec3,
       scale: s.scale,
       layerId: s.layerId,
+      fx: s.fx,
     })),
     layers: sceneState.layers.map((l) => ({ ...l })),
     activeLayerId: sceneState.activeLayerId,
@@ -236,6 +242,20 @@ export function reorderLayers(fromIndex: number, toIndex: number) {
   pushUndo();
   const [layer] = sceneState.layers.splice(fromIndex, 1);
   sceneState.layers.splice(toIndex, 0, layer);
+  sceneState.version++;
+}
+
+export function setShapeFx(id: string, fx: string | undefined) {
+  const shape = sceneState.shapes.find((s) => s.id === id);
+  if (!shape) return;
+  shape.fx = fx;
+  sceneState.version++;
+}
+
+export function setLayerFx(id: string, fx: string | undefined) {
+  const layer = sceneState.layers.find((l) => l.id === id);
+  if (!layer) return;
+  layer.fx = fx;
   sceneState.version++;
 }
 
@@ -425,6 +445,7 @@ export function duplicateShape(id: string): string | null {
     size: [...shape.size] as Vec3,
     scale: shape.scale,
     layerId: shape.layerId,
+    fx: shape.fx,
   });
   sceneState.selectedShapeId = newId;
   sceneState.version++;

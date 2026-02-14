@@ -89,3 +89,5 @@ Im not sure but we might need two matrices for each shape. one for the world pos
 
 - should be able to add some code to a layer. e.g add an `onion` effect or a `grow`. applied to everything in that layer after unioning.
   isc
+
+- multi select! ctrl+a

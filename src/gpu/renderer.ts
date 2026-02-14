@@ -12,7 +12,7 @@ import {
 } from "../constants";
 import type { ShapeType, TransferMode } from "../constants";
 import { ChunkManager } from "./chunkManager";
-import bakeWgsl from "../shaders/bake.wgsl?raw";
+import { generateBakeShader, type FxSlot } from "./bakegen";
 import chunkReduceWgsl from "../shaders/chunkReduce.wgsl?raw";
 import raymarchWgsl from "../shaders/raymarch.wgsl?raw";
 import linesWgsl from "../shaders/lines.wgsl?raw";
@@ -133,6 +133,22 @@ export class GPURenderer {
   private linesVertexBuffer!: GPUBuffer;
   private linesUniformBuffer!: GPUBuffer;
 
+  // Fx pipeline management
+  private lastBakeShaderCode = '';
+  private pipelineGeneration = 0;
+  private fallbackPipeline!: GPUComputePipeline; // flat NO_FX pipeline, always valid
+
+  // Pre-allocated typed arrays to avoid per-frame allocations
+  private readonly uniformData = new ArrayBuffer(UNIFORM_SIZE);
+  private readonly uniformF32 = new Float32Array(this.uniformData);
+  private readonly uniformI32 = new Int32Array(this.uniformData);
+  private readonly uniformU32 = new Uint32Array(this.uniformData);
+  private readonly bakeParamsBuf = new ArrayBuffer(32);
+  private readonly bakeParamsF32 = new Float32Array(this.bakeParamsBuf);
+  private readonly bakeParamsU32 = new Uint32Array(this.bakeParamsBuf);
+  private readonly reduceParamsBuf = new ArrayBuffer(32);
+  private readonly reduceParamsU32 = new Uint32Array(this.reduceParamsBuf);
+
   async init(canvas: HTMLCanvasElement): Promise<void> {
     if (!navigator.gpu) {
       throw new Error(
@@ -230,9 +246,9 @@ export class GPURenderer {
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
 
-    // Shape buffer: MAX_SHAPES * 48 bytes
+    // Shape buffer: MAX_SHAPES * 64 bytes (48 + fx_info + 3 pad)
     this.shapeBuffer = this.device.createBuffer({
-      size: MAX_SHAPES * 48,
+      size: MAX_SHAPES * 64,
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
     });
 
@@ -296,15 +312,18 @@ export class GPURenderer {
       ],
     });
 
+    const initialBakeCode = generateBakeShader([], []);
+    this.lastBakeShaderCode = initialBakeCode;
     this.bakePipeline = this.device.createComputePipeline({
       layout: this.device.createPipelineLayout({
         bindGroupLayouts: [this.bakeBindGroupLayout],
       }),
       compute: {
-        module: this.device.createShaderModule({ code: bakeWgsl }),
+        module: this.device.createShaderModule({ code: initialBakeCode }),
         entryPoint: "main",
       },
     });
+    this.fallbackPipeline = this.bakePipeline;
 
     // === Chunk reduce pipeline ===
     this.chunkReduceBindGroupLayout = this.device.createBindGroupLayout({
@@ -515,6 +534,35 @@ export class GPURenderer {
     return { worldPos, shapeId };
   }
 
+  private async tryRebuildBakePipeline(code: string): Promise<void> {
+    const gen = ++this.pipelineGeneration;
+    sceneState.fxCompiling = true;
+    try {
+      const module = this.device.createShaderModule({ code });
+      const info = await module.getCompilationInfo();
+      if (gen !== this.pipelineGeneration) return; // superseded by newer compilation
+      const errors = info.messages.filter(m => m.type === 'error');
+      if (errors.length > 0) {
+        sceneState.fxError = errors.map(e => `Line ${e.lineNum}: ${e.message}`).join('\n');
+        return;
+      }
+      sceneState.fxError = null;
+      this.bakePipeline = this.device.createComputePipeline({
+        layout: this.device.createPipelineLayout({
+          bindGroupLayouts: [this.bakeBindGroupLayout],
+        }),
+        compute: { module, entryPoint: 'main' },
+      });
+      // Force full rebake with the new fx pipeline
+      this.chunkManager.markAllDirty();
+      this.bake(sceneState.shapes as SDFShape[]);
+    } finally {
+      if (gen === this.pipelineGeneration) {
+        sceneState.fxCompiling = false;
+      }
+    }
+  }
+
   bake(shapes: readonly SDFShape[]): void {
     // Sort shapes by layer order (bottom layer first)
     const layers = sceneState.layers;
@@ -536,7 +584,62 @@ export class GPURenderer {
     const shapeCount = Math.min(sorted.length, MAX_SHAPES);
 
     // Store shape index → ID mapping for pick readback
-    this.lastBakeShapeIds = sorted.slice(0, shapeCount).map(s => s.id);
+    if (this.lastBakeShapeIds.length !== shapeCount) {
+      this.lastBakeShapeIds.length = shapeCount;
+    }
+    for (let i = 0; i < shapeCount; i++) {
+      this.lastBakeShapeIds[i] = sorted[i].id;
+    }
+
+    // Build fx slots: deduplicate identical fx code into numbered slots.
+    // Slots are stable across shape add/remove — only change when fx text changes
+    // or fx is toggled on/off.
+    const shapeFxSlots: FxSlot[] = [];
+    const shapeFxCodeToSlot = new Map<string, number>();
+    // Map shape ID → shape fx slot for GPU data writing
+    const shapeIdToFxSlot = new Map<string, number>();
+    for (let i = 0; i < shapeCount; i++) {
+      const s = sorted[i];
+      if (!s.fx) continue;
+      let slot = shapeFxCodeToSlot.get(s.fx);
+      if (slot === undefined) {
+        slot = shapeFxSlots.length + 1; // 1-based
+        shapeFxCodeToSlot.set(s.fx, slot);
+        shapeFxSlots.push({ slot, code: s.fx });
+      }
+      shapeIdToFxSlot.set(s.id, slot);
+    }
+
+    const layerFxSlots: FxSlot[] = [];
+    const layerFxCodeToSlot = new Map<string, number>();
+    // Map layer ID → layer fx slot
+    const layerIdToFxSlot = new Map<string, number>();
+    for (const l of layers) {
+      if (hiddenLayers.has(l.id) || !l.fx) continue;
+      let slot = layerFxCodeToSlot.get(l.fx);
+      if (slot === undefined) {
+        slot = layerFxSlots.length + 1; // 1-based
+        layerFxCodeToSlot.set(l.fx, slot);
+        layerFxSlots.push({ slot, code: l.fx });
+      }
+      layerIdToFxSlot.set(l.id, slot);
+    }
+
+    const code = generateBakeShader(shapeFxSlots, layerFxSlots);
+    if (code !== this.lastBakeShaderCode) {
+      this.lastBakeShaderCode = code;
+      // Use fallback pipeline for immediate bake while the fx pipeline compiles
+      this.bakePipeline = this.fallbackPipeline;
+      this.chunkManager.markAllDirty();
+      this.tryRebuildBakePipeline(code);
+      // Fall through to bake with fallback pipeline (no return)
+    }
+
+    // Find last shape index per layer (for layer fx boundary markers)
+    const layerLastShapeIdx = new Map<string, number>();
+    for (let i = 0; i < shapeCount; i++) {
+      layerLastShapeIdx.set(sorted[i].layerId, i);
+    }
 
     // Sync chunk manager with current shapes
     const { dirtyChunks, chunkMapData } = this.chunkManager.sync(shapes);
@@ -552,14 +655,14 @@ export class GPURenderer {
       [CHUNK_MAP_SIZE, CHUNK_MAP_SIZE, CHUNK_MAP_SIZE],
     );
 
-    // Write shape data once
+    // Write shape data (64 bytes per shape)
     if (shapeCount > 0) {
-      const buf = new ArrayBuffer(shapeCount * 48);
+      const buf = new ArrayBuffer(shapeCount * 64);
       const f32 = new Float32Array(buf);
       const u32 = new Uint32Array(buf);
       for (let i = 0; i < shapeCount; i++) {
         const s = sorted[i];
-        const off = i * 12; // 48 bytes / 4 = 12 floats per shape
+        const off = i * 16; // 64 bytes / 4 = 16 u32s per shape
         f32[off + 0] = s.position[0];
         f32[off + 1] = s.position[1];
         f32[off + 2] = s.position[2];
@@ -580,6 +683,14 @@ export class GPURenderer {
         f32[off + 9] = s.rotation[1];
         f32[off + 10] = s.rotation[2];
         f32[off + 11] = s.scale;
+        // fx_info: bits 0-7 = shape fx slot, bits 8-15 = layer fx slot (last shape of layer only)
+        const sfxSlot = shapeIdToFxSlot.get(s.id) ?? 0;
+        const isLastInLayer = layerLastShapeIdx.get(s.layerId) === i;
+        const lfxSlot = isLastInLayer ? (layerIdToFxSlot.get(s.layerId) ?? 0) : 0;
+        u32[off + 12] = (sfxSlot & 0xFF) | ((lfxSlot & 0xFF) << 8);
+        u32[off + 13] = 0; // _pad0
+        u32[off + 14] = 0; // _pad1
+        u32[off + 15] = 0; // _pad2
       }
       this.device.queue.writeBuffer(this.shapeBuffer, 0, buf);
     }
@@ -593,14 +704,17 @@ export class GPURenderer {
       const batchCount = batchEnd - batchStart;
 
       // Upload all bake + reduce params for this batch upfront (256-byte stride)
+      // Reuse pre-allocated typed arrays to avoid per-chunk allocations
+      const bpF32 = this.bakeParamsF32;
+      const bpU32 = this.bakeParamsU32;
+      const rpU32 = this.reduceParamsU32;
+      const half = CHUNK_MAP_SIZE / 2;
+
       for (let i = 0; i < batchCount; i++) {
         const chunk = dirtyChunks[batchStart + i];
         const origin = ChunkManager.chunkOrigin(chunk.cx, chunk.cy, chunk.cz);
         const atlasOffset = ChunkManager.atlasSlotToOffset(chunk.slotIndex);
 
-        const bakeParams = new ArrayBuffer(32);
-        const bpF32 = new Float32Array(bakeParams);
-        const bpU32 = new Uint32Array(bakeParams);
         bpF32[0] = origin[0];
         bpF32[1] = origin[1];
         bpF32[2] = origin[2];
@@ -609,11 +723,8 @@ export class GPURenderer {
         bpU32[5] = atlasOffset[1];
         bpU32[6] = atlasOffset[2];
         bpF32[7] = VOXEL_SIZE;
-        this.device.queue.writeBuffer(this.bakeParamsBuffer, i * 256, bakeParams);
+        this.device.queue.writeBuffer(this.bakeParamsBuffer, i * 256, this.bakeParamsBuf);
 
-        const half = CHUNK_MAP_SIZE / 2;
-        const reduceParams = new ArrayBuffer(32);
-        const rpU32 = new Uint32Array(reduceParams);
         rpU32[0] = atlasOffset[0];
         rpU32[1] = atlasOffset[1];
         rpU32[2] = atlasOffset[2];
@@ -622,7 +733,7 @@ export class GPURenderer {
         rpU32[5] = chunk.cy + half;
         rpU32[6] = chunk.cz + half;
         rpU32[7] = 0;
-        this.device.queue.writeBuffer(this.reduceParamsBuffer, i * 256, reduceParams);
+        this.device.queue.writeBuffer(this.reduceParamsBuffer, i * 256, this.reduceParamsBuf);
       }
 
       const encoder = this.device.createCommandEncoder();
@@ -677,11 +788,10 @@ export class GPURenderer {
     height: number,
     wireframes: WireframeBox[],
   ): void {
-    // Write uniforms (240 bytes)
-    const data = new ArrayBuffer(UNIFORM_SIZE);
-    const f32 = new Float32Array(data);
-    const i32 = new Int32Array(data);
-    const u32 = new Uint32Array(data);
+    // Write uniforms (240 bytes) — reuse pre-allocated buffer
+    const f32 = this.uniformF32;
+    const i32 = this.uniformI32;
+    const u32 = this.uniformU32;
 
     // 0-15: camera_matrix (64 bytes)
     f32.set(cameraMatrixWorld, 0);
@@ -728,7 +838,7 @@ export class GPURenderer {
     f32[58] = bmax[2];
     f32[59] = 0;
 
-    this.device.queue.writeBuffer(this.uniformBuffer, 0, data);
+    this.device.queue.writeBuffer(this.uniformBuffer, 0, this.uniformData);
 
     const encoder = this.device.createCommandEncoder();
     const textureView = this.context.getCurrentTexture().createView();

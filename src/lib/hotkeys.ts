@@ -41,8 +41,13 @@ function matchesCombo(e: KeyboardEvent, c: KeyCombo): boolean {
 }
 
 function isInputFocused(e: KeyboardEvent): boolean {
-  const tag = (e.target as HTMLElement)?.tagName;
-  return tag === "INPUT" || tag === "TEXTAREA";
+  const el = e.target as HTMLElement;
+  if (!el) return false;
+  const tag = el.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA") return true;
+  // Monaco editor uses contentEditable divs and nested textareas
+  if (el.closest('.monaco-editor')) return true;
+  return false;
 }
 
 let clipboard: Omit<SDFShape, "id" | "layerId"> | null = null;

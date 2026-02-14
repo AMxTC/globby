@@ -9,9 +9,13 @@ struct Shape {
   position: vec3<f32>,
   shape_type: u32,
   size: vec3<f32>,
-  transfer_packed: u32, // low 16 = mode, high 16 = opacity*1000
+  transfer_packed: u32, // bits 0-7=mode, 8-19=opacity*4095, 20-31=param*4095
   rotation: vec3<f32>,   // euler angles
   scale: f32,            // uniform scale
+  fx_info: u32,          // bits 0-7=shape_fx_slot, 8-15=layer_fx_slot (last shape in layer only)
+  _pad0: u32,
+  _pad1: u32,
+  _pad2: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: BakeParams;
@@ -99,6 +103,8 @@ fn buildInvRotation(euler: vec3<f32>) -> mat3x3<f32> {
 }
 
 const SLOT_SIZE: u32 = 34u;
+
+// === MAIN (no-fx flat loop) ===
 
 @compute @workgroup_size(4, 4, 4)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
