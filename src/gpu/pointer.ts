@@ -4,7 +4,7 @@ import {
   startDrag, updateBase, lockBase,
   updateHeight, commitHeight,
   startRadiusDrag, updateRadius, commitRadius,
-  selectShape, enterEditMode, exitEditMode,
+  selectShape, toggleShapeSelection, enterEditMode, exitEditMode,
   type Vec3,
 } from "../state/sceneStore";
 import type { GPURenderer } from "./renderer";
@@ -107,13 +107,20 @@ export function setupPointer(
       const pixelX = (e.clientX - rect.left) * dpr;
       const pixelY = (e.clientY - rect.top) * dpr;
 
+      const shiftKey = e.shiftKey;
       const renderer = getRenderer();
       if (renderer) {
         renderer.pickWorldPos(pixelX, pixelY).then((result) => {
-          if (result) {
-            selectShape(result.shapeId);
+          if (result && result.shapeId) {
+            if (shiftKey) {
+              toggleShapeSelection(result.shapeId);
+            } else {
+              selectShape(result.shapeId);
+            }
           } else {
-            selectShape(null);
+            if (!shiftKey) {
+              selectShape(null);
+            }
           }
         });
       }
@@ -245,8 +252,7 @@ export function setupPointer(
     if (sceneState.activeTool !== "select") return;
     if (e.button !== 0) return;
 
-    const selectedId = sceneState.selectedShapeId;
-    if (selectedId) {
+    if (sceneState.selectedShapeIds.length === 1) {
       if (sceneState.editMode === "edit") {
         exitEditMode();
       } else {

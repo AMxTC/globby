@@ -133,8 +133,8 @@ export default function SidePanel() {
   const draggingDivider = useRef(false);
 
   const activeLayer = snap.layers.find((l) => l.id === snap.activeLayerId);
-  const selectedShape = snap.selectedShapeId
-    ? snap.shapes.find((s) => s.id === snap.selectedShapeId)
+  const selectedShape = snap.selectedShapeIds.length === 1
+    ? snap.shapes.find((s) => s.id === snap.selectedShapeIds[0])
     : null;
 
   function startEditing(layer: { id: string; name: string }) {
@@ -453,6 +453,10 @@ export default function SidePanel() {
               showShapeFx={showShapeFx}
               onToggleShapeFx={() => setShowShapeFx(!showShapeFx)}
             />
+          ) : snap.selectedShapeIds.length > 1 ? (
+            <div className="flex items-center justify-center h-full text-[11px] text-muted-foreground">
+              {snap.selectedShapeIds.length} shapes selected
+            </div>
           ) : (
             <div className="flex items-center justify-center h-full text-[11px] text-muted-foreground">
               No selection

@@ -127,6 +127,85 @@ export function rotatedAABBHalfExtents(
 }
 
 /**
+ * Rodrigues' rotation: rotate vector v around unit axis by angle (radians).
+ */
+export function rotateVecAroundAxis(v: Vec3, axis: Vec3, angle: number): Vec3 {
+  const c = Math.cos(angle);
+  const s = Math.sin(angle);
+  const dot = v[0] * axis[0] + v[1] * axis[1] + v[2] * axis[2];
+  // cross = axis × v
+  const cx = axis[1] * v[2] - axis[2] * v[1];
+  const cy = axis[2] * v[0] - axis[0] * v[2];
+  const cz = axis[0] * v[1] - axis[1] * v[0];
+  return [
+    v[0] * c + cx * s + axis[0] * dot * (1 - c),
+    v[1] * c + cy * s + axis[1] * dot * (1 - c),
+    v[2] * c + cz * s + axis[2] * dot * (1 - c),
+  ];
+}
+
+/**
+ * Extract XYZ euler angles from a column-major 3×3 rotation matrix.
+ * Same convention as eulerToMatrix3: R = Rz·Ry·Rx, column-major [col0, col1, col2].
+ */
+export function mat3ToEulerXYZ(m: number[]): Vec3 {
+  // m[col*3+row], R row i col j = m[j*3+i]
+  const sy = -m[2]; // R[0][2] = -sin(ry)
+  let ry: number, rx: number, rz: number;
+  if (Math.abs(sy) < 0.99999) {
+    ry = Math.asin(Math.max(-1, Math.min(1, sy)));
+    rx = Math.atan2(m[5], m[8]); // R[1][2], R[2][2] = sx*cy, cx*cy
+    rz = Math.atan2(m[1], m[0]); // R[0][1], R[0][0] = cy*sz, cy*cz
+  } else {
+    // Gimbal lock
+    ry = sy > 0 ? Math.PI / 2 : -Math.PI / 2;
+    rx = Math.atan2(m[3], m[4]);
+    rz = 0;
+  }
+  return [rx, ry, rz];
+}
+
+/**
+ * Apply a world-space axis+angle rotation on top of an existing euler rotation.
+ * Returns new euler angles.
+ */
+export function composeWorldRotation(existingEuler: Vec3, worldAxis: Vec3, angle: number): Vec3 {
+  // Build existing rotation matrix (column-major 3×3)
+  const mExist = eulerToMatrix3(existingEuler[0], existingEuler[1], existingEuler[2]);
+  // Build axis-angle rotation matrix (Rodrigues)
+  const c = Math.cos(angle);
+  const s = Math.sin(angle);
+  const t = 1 - c;
+  const [ax, ay, az] = worldAxis;
+  // Column-major: mRot[col*3+row]
+  const mRot = [
+    // col 0
+    t * ax * ax + c,
+    t * ax * ay + s * az,
+    t * ax * az - s * ay,
+    // col 1
+    t * ax * ay - s * az,
+    t * ay * ay + c,
+    t * ay * az + s * ax,
+    // col 2
+    t * ax * az + s * ay,
+    t * ay * az - s * ax,
+    t * az * az + c,
+  ];
+  // Multiply: mResult = mRot * mExist (column-major)
+  const mResult: number[] = new Array(9);
+  for (let col = 0; col < 3; col++) {
+    for (let row = 0; row < 3; row++) {
+      mResult[col * 3 + row] =
+        mRot[0 * 3 + row] * mExist[col * 3 + 0] +
+        mRot[1 * 3 + row] * mExist[col * 3 + 1] +
+        mRot[2 * 3 + row] * mExist[col * 3 + 2];
+    }
+  }
+  return mat3ToEulerXYZ(mResult);
+}
+
+/**
  * Project mouse ray onto an arbitrary axis line through origin.
  * Returns the parameter t along the direction.
  */

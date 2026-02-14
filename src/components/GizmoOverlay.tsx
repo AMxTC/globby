@@ -7,6 +7,10 @@ import {
   scaleShape,
   rotateShape,
   duplicateShape,
+  duplicateSelectedShapes,
+  moveShapes,
+  rotateShapesAroundPivot,
+  scaleShapesAroundPivot,
   type Vec3,
   type SDFShape,
 } from "../state/sceneStore";
@@ -16,6 +20,8 @@ import {
   projectRayOnPlane,
   gizmoWorldLength,
   eulerToMatrix3,
+  rotateVecAroundAxis,
+  composeWorldRotation,
 } from "../lib/math3d";
 
 const AXIS_COLORS = { x: "#ef4444", y: "#22c55e", z: "#3b82f6" } as const;
@@ -42,6 +48,11 @@ interface DragInfo {
   negative?: boolean;    // for scale: negative-side handle
   duplicatedFrom?: string; // set when alt+drag created a duplicate
   startAngle?: number;   // for rotation drag
+  pivotPos: Vec3;                  // centroid (single: same as startPos)
+  multiShapeIds?: string[];        // set for multi-select drags
+  multiStartPositions?: Vec3[];
+  multiStartRotations?: Vec3[];
+  multiStartScales?: number[];
 }
 
 /** Compute local axes from shape rotation */
@@ -189,19 +200,43 @@ export default function GizmoOverlay() {
     // --- Frame update function ---
     function update(vpMat: Matrix4, w: number, h: number) {
       const camera = sceneRefs.camera;
-      const selectedId = sceneState.selectedShapeId;
-      if (!selectedId || !camera) {
+      const selectedIds = sceneState.selectedShapeIds;
+      if (selectedIds.length === 0 || !camera) {
         g.style.display = "none";
         return;
       }
-      const shape = sceneState.shapes.find((s) => s.id === selectedId);
-      if (!shape) {
+
+      const isSingle = selectedIds.length === 1;
+      const shape = isSingle
+        ? sceneState.shapes.find((s) => s.id === selectedIds[0])
+        : null;
+
+      if (isSingle && !shape) {
         g.style.display = "none";
         return;
       }
+
+      // Compute gizmo position: single = shape.position, multi = centroid
+      let pos: Vec3;
+      let localAxes: Vec3[];
+      if (isSingle && shape) {
+        pos = shape.position;
+        localAxes = getLocalAxes(shape.rotation);
+      } else {
+        let cx2 = 0, cy2 = 0, cz2 = 0, count = 0;
+        for (const id of selectedIds) {
+          const s = sceneState.shapes.find((sh) => sh.id === id);
+          if (!s) continue;
+          cx2 += s.position[0]; cy2 += s.position[1]; cz2 += s.position[2];
+          count++;
+        }
+        if (count === 0) { g.style.display = "none"; return; }
+        pos = [cx2 / count, cy2 / count, cz2 / count];
+        localAxes = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]; // world axes for multi
+      }
+
       g.style.display = "";
 
-      const pos = shape.position;
       const [cx, cy, vis] = worldToScreen(pos, vpMat, w, h);
 
       if (!vis) {
@@ -209,10 +244,7 @@ export default function GizmoOverlay() {
         return;
       }
 
-      const isEdit = sceneState.editMode === "edit";
-
-      // Compute local axes from shape rotation
-      const localAxes = getLocalAxes(shape.rotation);
+      const isEdit = isSingle && sceneState.editMode === "edit";
 
       // --- Object mode elements ---
       const showObj = !isEdit;
@@ -337,7 +369,7 @@ export default function GizmoOverlay() {
       }
 
       // --- Edit mode control points ---
-      const cpDefs = isEdit ? getControlPoints(shape) : [];
+      const cpDefs = isEdit && shape ? getControlPoints(shape) : [];
       for (let i = 0; i < MAX_CPS; i++) {
         const { circle, dashLine } = cpEls[i];
         if (i >= cpDefs.length) {
@@ -374,10 +406,13 @@ export default function GizmoOverlay() {
       const canvas = sceneRefs.canvas;
       if (!camera || !canvas) return;
 
-      const selectedId = sceneState.selectedShapeId;
-      if (!selectedId) return;
-      const shape = sceneState.shapes.find((s) => s.id === selectedId);
-      if (!shape) return;
+      const selectedIds = sceneState.selectedShapeIds;
+      if (selectedIds.length === 0) return;
+
+      const isSingle = selectedIds.length === 1;
+      const primaryId = selectedIds[0];
+      const primaryShape = sceneState.shapes.find((s) => s.id === primaryId);
+      if (!primaryShape) return;
 
       e.preventDefault();
       e.stopPropagation();
@@ -385,111 +420,180 @@ export default function GizmoOverlay() {
 
       const axis = target.dataset.axis as "x" | "y" | "z";
       const axisIdx = axis === "x" ? 0 : axis === "y" ? 1 : 2;
-      const localAxes = getLocalAxes(shape.rotation);
-      const axisDir = localAxes[axisIdx];
+
+      // For single: local axes from shape rotation. For multi: world axes.
+      let axisDir: Vec3;
+      let currentLocalAxes: Vec3[];
+      if (isSingle) {
+        currentLocalAxes = getLocalAxes(primaryShape.rotation);
+        axisDir = currentLocalAxes[axisIdx];
+      } else {
+        currentLocalAxes = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+        axisDir = currentLocalAxes[axisIdx];
+      }
+
+      // Compute pivot (centroid for multi, shape.position for single)
+      let pivotPos: Vec3;
+      if (isSingle) {
+        pivotPos = [...primaryShape.position] as Vec3;
+      } else {
+        let px = 0, py = 0, pz = 0, cnt = 0;
+        for (const id of selectedIds) {
+          const s = sceneState.shapes.find((sh) => sh.id === id);
+          if (!s) continue;
+          px += s.position[0]; py += s.position[1]; pz += s.position[2];
+          cnt++;
+        }
+        pivotPos = [px / cnt, py / cnt, pz / cnt];
+      }
+
+      // Snapshot multi-shape state
+      let multiShapeIds: string[] | undefined;
+      let multiStartPositions: Vec3[] | undefined;
+      let multiStartRotations: Vec3[] | undefined;
+      let multiStartScales: number[] | undefined;
+      if (!isSingle) {
+        multiShapeIds = [...selectedIds];
+        multiStartPositions = [];
+        multiStartRotations = [];
+        multiStartScales = [];
+        for (const id of selectedIds) {
+          const s = sceneState.shapes.find((sh) => sh.id === id);
+          if (!s) continue;
+          multiStartPositions.push([...s.position] as Vec3);
+          multiStartRotations.push([...s.rotation] as Vec3);
+          multiStartScales.push(s.scale);
+        }
+      }
 
       if (role === "translate") {
         const startT = projectRayOnAxisDir(
-          camera, canvas, e.clientX, e.clientY, shape.position, axisDir,
+          camera, canvas, e.clientX, e.clientY, pivotPos, axisDir,
         );
 
         if (e.altKey) {
-          const newId = duplicateShape(selectedId);
-          if (newId) {
-            const clonedShape = sceneState.shapes.find((s) => s.id === newId);
-            dragRef.current = {
-              kind: "translate",
-              axis,
-              axisIdx,
-              shapeId: newId,
-              startT,
-              startPos: [...clonedShape!.position] as Vec3,
-              startSize: [...clonedShape!.size] as Vec3,
-              axisDir,
-              startRotation: [...clonedShape!.rotation] as Vec3,
-              startScale: clonedShape!.scale,
-              duplicatedFrom: selectedId,
-            };
+          if (isSingle) {
+            const newId = duplicateShape(primaryId);
+            if (newId) {
+              const clonedShape = sceneState.shapes.find((s) => s.id === newId);
+              dragRef.current = {
+                kind: "translate", axis, axisIdx,
+                shapeId: newId, startT,
+                startPos: [...clonedShape!.position] as Vec3,
+                startSize: [...clonedShape!.size] as Vec3,
+                axisDir,
+                startRotation: [...clonedShape!.rotation] as Vec3,
+                startScale: clonedShape!.scale,
+                duplicatedFrom: primaryId,
+                pivotPos: [...clonedShape!.position] as Vec3,
+              };
+            }
+          } else {
+            // Multi-select alt+drag: duplicate all selected
+            const newIds = duplicateSelectedShapes();
+            if (newIds.length > 0) {
+              const newMultiPositions: Vec3[] = [];
+              const newMultiRotations: Vec3[] = [];
+              const newMultiScales: number[] = [];
+              for (const nid of newIds) {
+                const s = sceneState.shapes.find((sh) => sh.id === nid);
+                if (!s) continue;
+                newMultiPositions.push([...s.position] as Vec3);
+                newMultiRotations.push([...s.rotation] as Vec3);
+                newMultiScales.push(s.scale);
+              }
+              dragRef.current = {
+                kind: "translate", axis, axisIdx,
+                shapeId: newIds[0], startT,
+                startPos: [...pivotPos] as Vec3,
+                startSize: [0, 0, 0],
+                axisDir,
+                startRotation: [0, 0, 0],
+                startScale: 1,
+                duplicatedFrom: primaryId,
+                pivotPos: [...pivotPos] as Vec3,
+                multiShapeIds: newIds,
+                multiStartPositions: newMultiPositions,
+                multiStartRotations: newMultiRotations,
+                multiStartScales: newMultiScales,
+              };
+            }
           }
         } else {
           dragRef.current = {
-            kind: "translate",
-            axis,
-            axisIdx,
-            shapeId: selectedId,
-            startT,
-            startPos: [...shape.position] as Vec3,
-            startSize: [...shape.size] as Vec3,
+            kind: "translate", axis, axisIdx,
+            shapeId: primaryId, startT,
+            startPos: [...primaryShape.position] as Vec3,
+            startSize: [...primaryShape.size] as Vec3,
             axisDir,
-            startRotation: [...shape.rotation] as Vec3,
-            startScale: shape.scale,
+            startRotation: [...primaryShape.rotation] as Vec3,
+            startScale: primaryShape.scale,
+            pivotPos,
+            multiShapeIds, multiStartPositions, multiStartRotations, multiStartScales,
           };
         }
       } else if (role === "scale") {
         const startT = projectRayOnAxisDir(
-          camera, canvas, e.clientX, e.clientY, shape.position, axisDir,
+          camera, canvas, e.clientX, e.clientY, pivotPos, axisDir,
         );
         const negative = target.dataset.negative === "1";
         dragRef.current = {
-          kind: "scale",
-          axis,
-          axisIdx,
-          shapeId: selectedId,
-          startT,
-          startPos: [...shape.position] as Vec3,
-          startSize: [...shape.size] as Vec3,
+          kind: "scale", axis, axisIdx,
+          shapeId: primaryId, startT,
+          startPos: [...primaryShape.position] as Vec3,
+          startSize: [...primaryShape.size] as Vec3,
           axisDir,
-          startRotation: [...shape.rotation] as Vec3,
-          startScale: shape.scale,
+          startRotation: [...primaryShape.rotation] as Vec3,
+          startScale: primaryShape.scale,
           negative,
+          pivotPos,
+          multiShapeIds, multiStartPositions, multiStartRotations, multiStartScales,
         };
       } else if (role === "rotate") {
-        // Compute initial angle by intersecting mouse ray with the rotation plane
         const planeNormal = axisDir;
         const hitPoint = projectRayOnPlane(
-          camera, canvas, e.clientX, e.clientY, shape.position, planeNormal,
+          camera, canvas, e.clientX, e.clientY, pivotPos, planeNormal,
         );
         let startAngle = 0;
         if (hitPoint) {
-          const basis0 = localAxes[(axisIdx + 1) % 3];
-          const basis1 = localAxes[(axisIdx + 2) % 3];
-          const dx = hitPoint[0] - shape.position[0];
-          const dy = hitPoint[1] - shape.position[1];
-          const dz = hitPoint[2] - shape.position[2];
+          const basis0 = currentLocalAxes[(axisIdx + 1) % 3];
+          const basis1 = currentLocalAxes[(axisIdx + 2) % 3];
+          const dx = hitPoint[0] - pivotPos[0];
+          const dy = hitPoint[1] - pivotPos[1];
+          const dz = hitPoint[2] - pivotPos[2];
           const proj0 = dx * basis0[0] + dy * basis0[1] + dz * basis0[2];
           const proj1 = dx * basis1[0] + dy * basis1[1] + dz * basis1[2];
           startAngle = Math.atan2(proj1, proj0);
         }
         dragRef.current = {
-          kind: "rotate",
-          axis,
-          axisIdx,
-          shapeId: selectedId,
-          startT: 0,
-          startPos: [...shape.position] as Vec3,
-          startSize: [...shape.size] as Vec3,
+          kind: "rotate", axis, axisIdx,
+          shapeId: primaryId, startT: 0,
+          startPos: [...primaryShape.position] as Vec3,
+          startSize: [...primaryShape.size] as Vec3,
           axisDir,
-          startRotation: [...shape.rotation] as Vec3,
-          startScale: shape.scale,
+          startRotation: [...primaryShape.rotation] as Vec3,
+          startScale: primaryShape.scale,
           startAngle,
+          pivotPos,
+          multiShapeIds, multiStartPositions, multiStartRotations, multiStartScales,
         };
       } else if (role === "editCp") {
+        // Edit mode only for single selection
+        if (!isSingle) return;
         const startT = projectRayOnAxisDir(
-          camera, canvas, e.clientX, e.clientY, shape.position, axisDir,
+          camera, canvas, e.clientX, e.clientY, primaryShape.position, axisDir,
         );
         const negative = target.dataset.negative === "1";
         dragRef.current = {
-          kind: "editFace",
-          axis,
-          axisIdx,
-          shapeId: selectedId,
-          startT,
-          startPos: [...shape.position] as Vec3,
-          startSize: [...shape.size] as Vec3,
+          kind: "editFace", axis, axisIdx,
+          shapeId: primaryId, startT,
+          startPos: [...primaryShape.position] as Vec3,
+          startSize: [...primaryShape.size] as Vec3,
           axisDir,
-          startRotation: [...shape.rotation] as Vec3,
-          startScale: shape.scale,
+          startRotation: [...primaryShape.rotation] as Vec3,
+          startScale: primaryShape.scale,
           negative,
+          pivotPos: [...primaryShape.position] as Vec3,
         };
       }
     }
@@ -504,53 +608,121 @@ export default function GizmoOverlay() {
       e.preventDefault();
       e.stopPropagation();
 
-      const shape = sceneState.shapes.find((s) => s.id === drag.shapeId);
-      if (!shape) return;
+      const isMulti = drag.multiShapeIds != null && drag.multiShapeIds.length > 0;
 
       if (drag.kind === "rotate") {
         // Rotation drag: intersect with rotation plane
         const hitPoint = projectRayOnPlane(
-          camera, canvas, e.clientX, e.clientY, drag.startPos, drag.axisDir,
+          camera, canvas, e.clientX, e.clientY, drag.pivotPos, drag.axisDir,
         );
         if (!hitPoint) return;
-        const localAxes = getLocalAxes(drag.startRotation);
-        const basis0 = localAxes[(drag.axisIdx + 1) % 3];
-        const basis1 = localAxes[(drag.axisIdx + 2) % 3];
-        const dx = hitPoint[0] - drag.startPos[0];
-        const dy = hitPoint[1] - drag.startPos[1];
-        const dz = hitPoint[2] - drag.startPos[2];
+
+        // Compute basis vectors for angle calculation
+        let basis0: Vec3, basis1: Vec3;
+        if (isMulti) {
+          // World axes
+          const worldAxes: Vec3[] = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+          basis0 = worldAxes[(drag.axisIdx + 1) % 3];
+          basis1 = worldAxes[(drag.axisIdx + 2) % 3];
+        } else {
+          const la = getLocalAxes(drag.startRotation);
+          basis0 = la[(drag.axisIdx + 1) % 3];
+          basis1 = la[(drag.axisIdx + 2) % 3];
+        }
+
+        const dx = hitPoint[0] - drag.pivotPos[0];
+        const dy = hitPoint[1] - drag.pivotPos[1];
+        const dz = hitPoint[2] - drag.pivotPos[2];
         const proj0 = dx * basis0[0] + dy * basis0[1] + dz * basis0[2];
         const proj1 = dx * basis1[0] + dy * basis1[1] + dz * basis1[2];
         const currentAngle = Math.atan2(proj1, proj0);
         let deltaAngle = currentAngle - (drag.startAngle ?? 0);
         deltaAngle = Math.atan2(Math.sin(deltaAngle), Math.cos(deltaAngle));
-
-        const newRotation: Vec3 = [...drag.startRotation];
-        newRotation[drag.axisIdx] += deltaAngle;
         if (e.shiftKey) {
-          newRotation[drag.axisIdx] = Math.round(newRotation[drag.axisIdx] / ROTATION_SNAP) * ROTATION_SNAP;
+          deltaAngle = Math.round(deltaAngle / ROTATION_SNAP) * ROTATION_SNAP;
         }
-        shape.rotation = newRotation;
-        sceneState.version++;
+
+        if (isMulti) {
+          // Multi-select: orbit all shapes around pivot
+          const { multiShapeIds, multiStartPositions, multiStartRotations } = drag;
+          for (let i = 0; i < multiShapeIds!.length; i++) {
+            const s = sceneState.shapes.find((sh) => sh.id === multiShapeIds![i]);
+            if (!s) continue;
+            const startP = multiStartPositions![i];
+            const startR = multiStartRotations![i];
+            // Orbit position
+            const rel: Vec3 = [startP[0] - drag.pivotPos[0], startP[1] - drag.pivotPos[1], startP[2] - drag.pivotPos[2]];
+            const rotated = rotateVecAroundAxis(rel, drag.axisDir, deltaAngle);
+            s.position = [drag.pivotPos[0] + rotated[0], drag.pivotPos[1] + rotated[1], drag.pivotPos[2] + rotated[2]];
+            // Compose rotation
+            s.rotation = composeWorldRotation(startR, drag.axisDir, deltaAngle);
+          }
+          sceneState.version++;
+        } else {
+          const shape = sceneState.shapes.find((s) => s.id === drag.shapeId);
+          if (!shape) return;
+          const newRotation: Vec3 = [...drag.startRotation];
+          newRotation[drag.axisIdx] += deltaAngle;
+          shape.rotation = newRotation;
+          sceneState.version++;
+        }
         return;
       }
 
       const currentT = projectRayOnAxisDir(
-        camera, canvas, e.clientX, e.clientY, drag.startPos, drag.axisDir,
+        camera, canvas, e.clientX, e.clientY, drag.pivotPos, drag.axisDir,
       );
       const delta = currentT - drag.startT;
 
       if (drag.kind === "translate") {
-        const newPos: Vec3 = [
-          drag.startPos[0] + drag.axisDir[0] * delta,
-          drag.startPos[1] + drag.axisDir[1] * delta,
-          drag.startPos[2] + drag.axisDir[2] * delta,
-        ];
-        shape.position = newPos;
-        sceneState.version++;
+        if (isMulti) {
+          const { multiShapeIds, multiStartPositions } = drag;
+          for (let i = 0; i < multiShapeIds!.length; i++) {
+            const s = sceneState.shapes.find((sh) => sh.id === multiShapeIds![i]);
+            if (!s) continue;
+            const sp = multiStartPositions![i];
+            s.position = [
+              sp[0] + drag.axisDir[0] * delta,
+              sp[1] + drag.axisDir[1] * delta,
+              sp[2] + drag.axisDir[2] * delta,
+            ];
+          }
+          sceneState.version++;
+        } else {
+          const shape = sceneState.shapes.find((s) => s.id === drag.shapeId);
+          if (!shape) return;
+          shape.position = [
+            drag.startPos[0] + drag.axisDir[0] * delta,
+            drag.startPos[1] + drag.axisDir[1] * delta,
+            drag.startPos[2] + drag.axisDir[2] * delta,
+          ];
+          sceneState.version++;
+        }
       } else if (drag.kind === "scale") {
-        applyScale(drag, delta, shape);
+        if (isMulti) {
+          const d = drag.negative ? -delta : delta;
+          const scaleFactor = Math.max(0.01, 1 + d);
+          const { multiShapeIds, multiStartPositions, multiStartScales } = drag;
+          for (let i = 0; i < multiShapeIds!.length; i++) {
+            const s = sceneState.shapes.find((sh) => sh.id === multiShapeIds![i]);
+            if (!s) continue;
+            const sp = multiStartPositions![i];
+            s.position = [
+              drag.pivotPos[0] + (sp[0] - drag.pivotPos[0]) * scaleFactor,
+              drag.pivotPos[1] + (sp[1] - drag.pivotPos[1]) * scaleFactor,
+              drag.pivotPos[2] + (sp[2] - drag.pivotPos[2]) * scaleFactor,
+            ];
+            s.scale = multiStartScales![i] * scaleFactor;
+          }
+          sceneState.version++;
+        } else {
+          const shape = sceneState.shapes.find((s) => s.id === drag.shapeId);
+          if (!shape) return;
+          applyScale(drag, delta, shape);
+        }
       } else if (drag.kind === "editFace") {
+        const shape = sceneState.shapes.find((s) => s.id === drag.shapeId);
+        if (!shape) return;
         applyEditFace(drag, delta, shape);
       }
     }
@@ -566,84 +738,138 @@ export default function GizmoOverlay() {
       const canvas = sceneRefs.canvas;
       if (!camera || !canvas) return;
 
+      const isMulti = drag.multiShapeIds != null && drag.multiShapeIds.length > 0;
+
       if (drag.kind === "rotate") {
-        // Compute final rotation
+        // Compute final delta angle
         const hitPoint = projectRayOnPlane(
-          camera, canvas, e.clientX, e.clientY, drag.startPos, drag.axisDir,
+          camera, canvas, e.clientX, e.clientY, drag.pivotPos, drag.axisDir,
         );
-        const localAxes = getLocalAxes(drag.startRotation);
-        const basis0 = localAxes[(drag.axisIdx + 1) % 3];
-        const basis1 = localAxes[(drag.axisIdx + 2) % 3];
+        let basis0: Vec3, basis1: Vec3;
+        if (isMulti) {
+          const worldAxes: Vec3[] = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+          basis0 = worldAxes[(drag.axisIdx + 1) % 3];
+          basis1 = worldAxes[(drag.axisIdx + 2) % 3];
+        } else {
+          const la = getLocalAxes(drag.startRotation);
+          basis0 = la[(drag.axisIdx + 1) % 3];
+          basis1 = la[(drag.axisIdx + 2) % 3];
+        }
         let deltaAngle = 0;
         if (hitPoint) {
-          const dx = hitPoint[0] - drag.startPos[0];
-          const dy = hitPoint[1] - drag.startPos[1];
-          const dz = hitPoint[2] - drag.startPos[2];
+          const dx = hitPoint[0] - drag.pivotPos[0];
+          const dy = hitPoint[1] - drag.pivotPos[1];
+          const dz = hitPoint[2] - drag.pivotPos[2];
           const proj0 = dx * basis0[0] + dy * basis0[1] + dz * basis0[2];
           const proj1 = dx * basis1[0] + dy * basis1[1] + dz * basis1[2];
           deltaAngle = Math.atan2(proj1, proj0) - (drag.startAngle ?? 0);
           deltaAngle = Math.atan2(Math.sin(deltaAngle), Math.cos(deltaAngle));
         }
-        // Restore startRotation, then commit via rotateShape (which pushes undo)
-        const shape = sceneState.shapes.find((s) => s.id === drag.shapeId);
-        if (shape) {
-          shape.rotation = [...drag.startRotation] as Vec3;
-          sceneState.version++;
-        }
-        const newRotation: Vec3 = [...drag.startRotation];
-        newRotation[drag.axisIdx] += deltaAngle;
         if (e.shiftKey) {
-          newRotation[drag.axisIdx] = Math.round(newRotation[drag.axisIdx] / ROTATION_SNAP) * ROTATION_SNAP;
+          deltaAngle = Math.round(deltaAngle / ROTATION_SNAP) * ROTATION_SNAP;
         }
-        rotateShape(drag.shapeId, newRotation);
+
+        if (isMulti) {
+          // Restore all shapes to start state, then commit via batch function
+          const { multiShapeIds, multiStartPositions, multiStartRotations } = drag;
+          for (let i = 0; i < multiShapeIds!.length; i++) {
+            const s = sceneState.shapes.find((sh) => sh.id === multiShapeIds![i]);
+            if (!s) continue;
+            s.position = [...multiStartPositions![i]] as Vec3;
+            s.rotation = [...multiStartRotations![i]] as Vec3;
+          }
+          sceneState.version++;
+          rotateShapesAroundPivot(multiShapeIds!, drag.pivotPos, drag.axisDir, deltaAngle);
+        } else {
+          // Restore startRotation, then commit via rotateShape (which pushes undo)
+          const shape = sceneState.shapes.find((s) => s.id === drag.shapeId);
+          if (shape) {
+            shape.rotation = [...drag.startRotation] as Vec3;
+            sceneState.version++;
+          }
+          const newRotation: Vec3 = [...drag.startRotation];
+          newRotation[drag.axisIdx] += deltaAngle;
+          rotateShape(drag.shapeId, newRotation);
+        }
         dragRef.current = null;
         return;
       }
 
       const currentT = projectRayOnAxisDir(
-        camera, canvas, e.clientX, e.clientY, drag.startPos, drag.axisDir,
+        camera, canvas, e.clientX, e.clientY, drag.pivotPos, drag.axisDir,
       );
       const delta = currentT - drag.startT;
 
       if (drag.kind === "translate") {
-        const newPos: Vec3 = [
-          drag.startPos[0] + drag.axisDir[0] * delta,
-          drag.startPos[1] + drag.axisDir[1] * delta,
-          drag.startPos[2] + drag.axisDir[2] * delta,
-        ];
-        if (drag.duplicatedFrom) {
-          // Duplicate drag: undo was already pushed by duplicateShape(), just set final position
-          const shape = sceneState.shapes.find((s) => s.id === drag.shapeId);
-          if (shape) {
-            shape.position = newPos;
+        if (isMulti) {
+          if (drag.duplicatedFrom) {
+            // Alt+drag duplicate: undo was already pushed by duplicateSelectedShapes
+            // Just leave shapes at their current positions (set during move)
+          } else {
+            // Restore all shapes to start, then commit via batch
+            const { multiShapeIds, multiStartPositions } = drag;
+            for (let i = 0; i < multiShapeIds!.length; i++) {
+              const s = sceneState.shapes.find((sh) => sh.id === multiShapeIds![i]);
+              if (!s) continue;
+              s.position = [...multiStartPositions![i]] as Vec3;
+            }
             sceneState.version++;
+            const moveDelta: Vec3 = [
+              drag.axisDir[0] * delta,
+              drag.axisDir[1] * delta,
+              drag.axisDir[2] * delta,
+            ];
+            moveShapes(multiShapeIds!, moveDelta);
           }
         } else {
-          // Normal drag: restore original position, then use moveShape (which pushes undo)
-          const shape = sceneState.shapes.find((s) => s.id === drag.shapeId);
-          if (shape) {
-            shape.position = [...drag.startPos] as Vec3;
-            sceneState.version++;
+          const newPos: Vec3 = [
+            drag.startPos[0] + drag.axisDir[0] * delta,
+            drag.startPos[1] + drag.axisDir[1] * delta,
+            drag.startPos[2] + drag.axisDir[2] * delta,
+          ];
+          if (drag.duplicatedFrom) {
+            const shape = sceneState.shapes.find((s) => s.id === drag.shapeId);
+            if (shape) {
+              shape.position = newPos;
+              sceneState.version++;
+            }
+          } else {
+            const shape = sceneState.shapes.find((s) => s.id === drag.shapeId);
+            if (shape) {
+              shape.position = [...drag.startPos] as Vec3;
+              sceneState.version++;
+            }
+            moveShape(drag.shapeId, newPos);
           }
-          moveShape(drag.shapeId, newPos);
         }
       } else if (drag.kind === "scale") {
-        // Restore original, then commit via scaleShape
-        const shape = sceneState.shapes.find((s) => s.id === drag.shapeId);
-        if (shape) {
-          const origPos: Vec3 = [...drag.startPos];
-          const origSize: Vec3 = [...drag.startSize];
-          shape.position = origPos;
-          shape.size = origSize;
-          shape.scale = drag.startScale;
+        if (isMulti) {
+          // Restore all, then commit via batch
+          const { multiShapeIds, multiStartPositions, multiStartScales } = drag;
+          for (let i = 0; i < multiShapeIds!.length; i++) {
+            const s = sceneState.shapes.find((sh) => sh.id === multiShapeIds![i]);
+            if (!s) continue;
+            s.position = [...multiStartPositions![i]] as Vec3;
+            s.scale = multiStartScales![i];
+          }
           sceneState.version++;
-
-          // Recompute final values
-          const newScale = computeUniformScale(drag, delta);
-          scaleShape(drag.shapeId, origSize, origPos, newScale);
+          const d = drag.negative ? -delta : delta;
+          const scaleFactor = Math.max(0.01, 1 + d);
+          scaleShapesAroundPivot(multiShapeIds!, drag.pivotPos, scaleFactor);
+        } else {
+          const shape = sceneState.shapes.find((s) => s.id === drag.shapeId);
+          if (shape) {
+            const origPos: Vec3 = [...drag.startPos];
+            const origSize: Vec3 = [...drag.startSize];
+            shape.position = origPos;
+            shape.size = origSize;
+            shape.scale = drag.startScale;
+            sceneState.version++;
+            const newScale = computeUniformScale(drag, delta);
+            scaleShape(drag.shapeId, origSize, origPos, newScale);
+          }
         }
       } else if (drag.kind === "editFace") {
-        // Restore original, then commit via scaleShape
         const shape = sceneState.shapes.find((s) => s.id === drag.shapeId);
         if (shape) {
           const origPos: Vec3 = [...drag.startPos];
@@ -651,8 +877,6 @@ export default function GizmoOverlay() {
           shape.position = origPos;
           shape.size = origSize;
           sceneState.version++;
-
-          // Recompute final values
           const newPos: Vec3 = [...drag.startPos];
           const newSize: Vec3 = [...drag.startSize];
           computeEditFace(drag, delta, newPos, newSize, shape);

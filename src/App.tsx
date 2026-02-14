@@ -3,6 +3,7 @@ import { Matrix4 } from "three";
 import { useSnapshot } from "valtio";
 import { sceneState, sceneRefs, type SDFShape } from "./state/sceneStore";
 import { GPURenderer, type WireframeBox } from "./gpu/renderer";
+import { rotatedAABBHalfExtents } from "./lib/math3d";
 import { CHUNK_WORLD_SIZE } from "./constants";
 import { createOrbitCamera } from "./gpu/orbit";
 import { setupPointer } from "./gpu/pointer";
@@ -119,30 +120,43 @@ export default function App() {
         }
 
         // Show selection wireframe
-        const selectedId = sceneState.selectedShapeId;
-        if (selectedId) {
-          const shape = sceneState.shapes.find((s) => s.id === selectedId);
-          if (shape) {
-            const showPos: [number, number, number] = [
-              ...shape.position,
-            ] as [number, number, number];
-            const showSize: [number, number, number] = [...shape.size] as [
-              number,
-              number,
-              number,
-            ];
+        const selectedIds = sceneState.selectedShapeIds;
+        const selColor: [number, number, number, number] =
+          themeState.theme === "dark"
+            ? [1, 1, 1, 0.6]
+            : [0.1, 0.1, 0.1, 0.6];
 
-            // Selection box (white)
+        if (selectedIds.length === 1) {
+          const shape = sceneState.shapes.find((s) => s.id === selectedIds[0]);
+          if (shape) {
             wireframes.push({
-              center: showPos,
-              halfSize: showSize,
-              // white if dark mode, black if light mode
-              color:
-                themeState.theme === "dark"
-                  ? [1, 1, 1, 0.6]
-                  : [0.1, 0.1, 0.1, 0.6],
+              center: [...shape.position] as [number, number, number],
+              halfSize: [...shape.size] as [number, number, number],
+              color: selColor,
               rotation: [...shape.rotation] as [number, number, number],
               scale: shape.scale,
+            });
+          }
+        } else if (selectedIds.length > 1) {
+          // Compute axis-aligned union AABB
+          let minX = Infinity, minY = Infinity, minZ = Infinity;
+          let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+          const idSet = new Set(selectedIds);
+          for (const shape of sceneState.shapes) {
+            if (!idSet.has(shape.id)) continue;
+            const he = rotatedAABBHalfExtents(shape.size, shape.rotation, shape.scale);
+            minX = Math.min(minX, shape.position[0] - he[0]);
+            minY = Math.min(minY, shape.position[1] - he[1]);
+            minZ = Math.min(minZ, shape.position[2] - he[2]);
+            maxX = Math.max(maxX, shape.position[0] + he[0]);
+            maxY = Math.max(maxY, shape.position[1] + he[1]);
+            maxZ = Math.max(maxZ, shape.position[2] + he[2]);
+          }
+          if (minX < Infinity) {
+            wireframes.push({
+              center: [(minX + maxX) / 2, (minY + maxY) / 2, (minZ + maxZ) / 2],
+              halfSize: [(maxX - minX) / 2, (maxY - minY) / 2, (maxZ - minZ) / 2],
+              color: selColor,
             });
           }
         }

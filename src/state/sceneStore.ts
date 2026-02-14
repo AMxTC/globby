@@ -1,5 +1,6 @@
 import { proxy } from "valtio";
 import { SHAPE_TYPES, type ShapeType, type TransferMode } from "../constants";
+import { rotateVecAroundAxis, composeWorldRotation } from "../lib/math3d";
 
 export type Vec3 = [number, number, number];
 
@@ -47,7 +48,7 @@ export const sceneState = proxy({
   ] as Layer[],
   activeLayerId: "1" as string,
   activeTool: "select" as "select" | ShapeType,
-  selectedShapeId: null as string | null,
+  selectedShapeIds: [] as string[],
   editMode: "object" as "object" | "edit",
   showDebugChunks: false,
   showGroundPlane: true,
@@ -132,7 +133,7 @@ function restore(snap: SceneSnapshot) {
     const n = Number(l.id);
     if (n >= nextLayerId) nextLayerId = n + 1;
   }
-  sceneState.selectedShapeId = null;
+  sceneState.selectedShapeIds = [];
   sceneState.version++;
 }
 
@@ -195,7 +196,7 @@ export function removeLayer(id: string) {
   if (sceneState.activeLayerId === id) {
     sceneState.activeLayerId = sceneState.layers[0].id;
   }
-  sceneState.selectedShapeId = null;
+  sceneState.selectedShapeIds = [];
   sceneState.version++;
 }
 
@@ -416,20 +417,37 @@ function resetDrag() {
 }
 
 export function selectShape(id: string | null) {
-  sceneState.selectedShapeId = id;
+  sceneState.selectedShapeIds = id ? [id] : [];
   sceneState.editMode = "object";
 }
 
-export function deleteSelectedShape() {
-  const id = sceneState.selectedShapeId;
-  if (!id) return;
-  const idx = sceneState.shapes.findIndex((s) => s.id === id);
+export function toggleShapeSelection(id: string) {
+  const idx = sceneState.selectedShapeIds.indexOf(id);
   if (idx >= 0) {
-    pushUndo();
-    sceneState.shapes.splice(idx, 1);
-    sceneState.selectedShapeId = null;
-    sceneState.version++;
+    sceneState.selectedShapeIds.splice(idx, 1);
+  } else {
+    sceneState.selectedShapeIds.push(id);
   }
+  if (sceneState.selectedShapeIds.length !== 1) {
+    sceneState.editMode = "object";
+  }
+}
+
+export function selectAll() {
+  sceneState.selectedShapeIds = sceneState.shapes.map((s) => s.id);
+  if (sceneState.selectedShapeIds.length !== 1) {
+    sceneState.editMode = "object";
+  }
+}
+
+export function deleteSelectedShapes() {
+  const ids = sceneState.selectedShapeIds;
+  if (ids.length === 0) return;
+  pushUndo();
+  const idSet = new Set(ids);
+  sceneState.shapes = sceneState.shapes.filter((s) => !idSet.has(s.id));
+  sceneState.selectedShapeIds = [];
+  sceneState.version++;
 }
 
 export function duplicateShape(id: string): string | null {
@@ -447,9 +465,35 @@ export function duplicateShape(id: string): string | null {
     layerId: shape.layerId,
     fx: shape.fx,
   });
-  sceneState.selectedShapeId = newId;
+  sceneState.selectedShapeIds = [newId];
   sceneState.version++;
   return newId;
+}
+
+export function duplicateSelectedShapes(): string[] {
+  const ids = sceneState.selectedShapeIds;
+  if (ids.length === 0) return [];
+  pushUndo();
+  const newIds: string[] = [];
+  for (const id of ids) {
+    const shape = sceneState.shapes.find((s) => s.id === id);
+    if (!shape) continue;
+    const newId = String(nextId++);
+    sceneState.shapes.push({
+      id: newId,
+      type: shape.type,
+      position: [...shape.position] as Vec3,
+      rotation: [...shape.rotation] as Vec3,
+      size: [...shape.size] as Vec3,
+      scale: shape.scale,
+      layerId: shape.layerId,
+      fx: shape.fx,
+    });
+    newIds.push(newId);
+  }
+  sceneState.selectedShapeIds = newIds;
+  sceneState.version++;
+  return newIds;
 }
 
 export function moveShape(id: string, newPosition: Vec3) {
@@ -486,8 +530,61 @@ export function moveShapeToLayer(id: string, layerId: string) {
   sceneState.version++;
 }
 
+export function moveShapes(ids: string[], delta: Vec3) {
+  pushUndo();
+  for (const id of ids) {
+    const shape = sceneState.shapes.find((s) => s.id === id);
+    if (!shape) continue;
+    shape.position = [
+      shape.position[0] + delta[0],
+      shape.position[1] + delta[1],
+      shape.position[2] + delta[2],
+    ];
+  }
+  sceneState.version++;
+}
+
+export function rotateShapesAroundPivot(ids: string[], pivot: Vec3, axis: Vec3, angle: number) {
+  pushUndo();
+  for (const id of ids) {
+    const shape = sceneState.shapes.find((s) => s.id === id);
+    if (!shape) continue;
+    // Orbit position around pivot
+    const rel: Vec3 = [
+      shape.position[0] - pivot[0],
+      shape.position[1] - pivot[1],
+      shape.position[2] - pivot[2],
+    ];
+    const rotated = rotateVecAroundAxis(rel, axis, angle);
+    shape.position = [
+      pivot[0] + rotated[0],
+      pivot[1] + rotated[1],
+      pivot[2] + rotated[2],
+    ];
+    // Compose world rotation onto existing euler
+    shape.rotation = composeWorldRotation(shape.rotation, axis, angle);
+  }
+  sceneState.version++;
+}
+
+export function scaleShapesAroundPivot(ids: string[], pivot: Vec3, scaleFactor: number) {
+  pushUndo();
+  for (const id of ids) {
+    const shape = sceneState.shapes.find((s) => s.id === id);
+    if (!shape) continue;
+    // Scale distance from pivot
+    shape.position = [
+      pivot[0] + (shape.position[0] - pivot[0]) * scaleFactor,
+      pivot[1] + (shape.position[1] - pivot[1]) * scaleFactor,
+      pivot[2] + (shape.position[2] - pivot[2]) * scaleFactor,
+    ];
+    shape.scale = shape.scale * scaleFactor;
+  }
+  sceneState.version++;
+}
+
 export function enterEditMode() {
-  if (!sceneState.selectedShapeId) return;
+  if (sceneState.selectedShapeIds.length !== 1) return;
   sceneState.editMode = "edit";
 }
 
