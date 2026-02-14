@@ -9,6 +9,7 @@ import { createOrbitCamera } from "./gpu/orbit";
 import { setupPointer } from "./gpu/pointer";
 import Toolbar from "./components/Toolbar";
 import SidePanel from "./components/SidePanel";
+import SettingsPanel from "./components/SettingsPanel";
 import GizmoOverlay from "./components/GizmoOverlay";
 import { themeState } from "./state/themeStore";
 import { setupHotkeys } from "./lib/hotkeys";
@@ -122,9 +123,9 @@ export default function App() {
         // Show selection wireframe
         const selectedIds = sceneState.selectedShapeIds;
         const selColor: [number, number, number, number] =
-          themeState.theme === "dark"
-            ? [1, 1, 1, 0.6]
-            : [0.1, 0.1, 0.1, 0.6];
+          themeState.theme === "light"
+            ? [0.1, 0.1, 0.1, 0.6]
+            : [1, 1, 1, 0.6];
 
         if (selectedIds.length === 1) {
           const shape = sceneState.shapes.find((s) => s.id === selectedIds[0]);
@@ -274,6 +275,7 @@ export default function App() {
         />
       )}
       <Toolbar />
+      <SettingsPanel />
       <SidePanel />
     </div>
   );

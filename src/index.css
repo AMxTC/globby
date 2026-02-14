@@ -1,6 +1,6 @@
 @import "tailwindcss";
 
-@custom-variant dark (&:is(.dark *));
+@custom-variant dark (&:is(.dark *, .grey *));
 
 @theme {
   --color-background: oklch(1 0 0);
@@ -34,9 +34,25 @@
   --color-destructive: oklch(0.577 0.245 27.325);
 }
 
+.grey {
+  --color-background: oklch(0.37 0 0);
+  --color-foreground: oklch(0.95 0 0);
+  --color-muted: oklch(0.42 0 0);
+  --color-muted-foreground: oklch(0.72 0 0);
+  --color-accent: oklch(0.45 0 0);
+  --color-accent-foreground: oklch(0.6559 0.2639 0);
+  --color-border: oklch(0.52 0 0);
+  --color-ring: oklch(0.62 0 0);
+  --color-primary: oklch(0.6559 0.2639 0);
+  --color-primary-foreground: oklch(0.2 0 0);
+  --color-destructive: oklch(0.577 0.245 27.325);
+}
+
 /* Tailwind preflight handles box-sizing and margin resets.
    Avoid `* { padding: 0 }` — it overrides Tailwind utility padding. */
 
 body {
   overflow: hidden;
+  font-family: "Inter", sans-serif;
+  letter-spacing: 0.01em;
 }

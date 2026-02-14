@@ -54,11 +54,12 @@ fn sdCone(p: vec3<f32>, h: f32, r: f32) -> f32 {
 }
 
 fn sdPyramid(p: vec3<f32>, h: f32, r: f32) -> f32 {
-  var pp = p;
+  var height = h*2.;
+  var pp = p - vec3(0., -h, 0.);
   pp.x = pp.x / (2.0 * r);
   pp.z = pp.z / (2.0 * r);
 
-  let m2 = h * h + 0.25;
+  let m2 = height * height + 0.25;
 
   pp.x = abs(pp.x);
   pp.z = abs(pp.z);
@@ -72,7 +73,7 @@ fn sdPyramid(p: vec3<f32>, h: f32, r: f32) -> f32 {
   pp.x = pp.x - 0.5;
   pp.z = pp.z - 0.5;
 
-  let q = vec3<f32>(pp.z, h * pp.y - 0.5 * pp.x, h * pp.x + 0.5 * pp.y);
+  let q = vec3<f32>(pp.z, height * pp.y - 0.5 * pp.x, height * pp.x + 0.5 * pp.y);
 
   let s = max(-q.x, 0.0);
   let t = clamp((q.y - 0.5 * pp.z) / (m2 + 0.25), 0.0, 1.0);
