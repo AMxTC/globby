@@ -434,7 +434,12 @@ export function toggleShapeSelection(id: string) {
 }
 
 export function selectAll() {
-  sceneState.selectedShapeIds = sceneState.shapes.map((s) => s.id);
+  const visibleLayerIds = new Set(
+    sceneState.layers.filter((l) => l.visible).map((l) => l.id),
+  );
+  sceneState.selectedShapeIds = sceneState.shapes
+    .filter((s) => visibleLayerIds.has(s.layerId))
+    .map((s) => s.id);
   if (sceneState.selectedShapeIds.length !== 1) {
     sceneState.editMode = "object";
   }
