@@ -399,6 +399,7 @@ export default function GizmoOverlay() {
 
     // --- Pointer handling ---
     function onPointerDown(e: PointerEvent) {
+      if (e.button !== 0) return; // left-click only
       const target = e.target as SVGElement;
       const role = target.dataset?.role;
       if (!role) return;
@@ -887,15 +888,21 @@ export default function GizmoOverlay() {
       dragRef.current = null;
     }
 
+    function onContextMenu(e: Event) {
+      e.preventDefault();
+    }
+
     svg.addEventListener("pointerdown", onPointerDown);
     svg.addEventListener("pointermove", onPointerMove);
     svg.addEventListener("pointerup", onPointerUp);
+    svg.addEventListener("contextmenu", onContextMenu);
 
     return () => {
       sceneRefs.updateGizmoOverlay = null;
       svg.removeEventListener("pointerdown", onPointerDown);
       svg.removeEventListener("pointermove", onPointerMove);
       svg.removeEventListener("pointerup", onPointerUp);
+      svg.removeEventListener("contextmenu", onContextMenu);
     };
   }, []);
 
