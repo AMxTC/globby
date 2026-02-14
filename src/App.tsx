@@ -13,6 +13,7 @@ import SettingsPanel from "./components/SettingsPanel";
 import GizmoOverlay from "./components/GizmoOverlay";
 import { themeState } from "./state/themeStore";
 import { setupHotkeys } from "./lib/hotkeys";
+import { bindCursorCanvas } from "./lib/cursors";
 
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -45,6 +46,7 @@ export default function App() {
       sceneRefs.camera = camera;
       sceneRefs.controls = controls;
       sceneRefs.canvas = canvas!;
+      bindCursorCanvas(canvas!);
 
       const cleanupHotkeys = setupHotkeys();
 

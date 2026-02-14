@@ -1,5 +1,6 @@
 import { PerspectiveCamera, MOUSE } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { setCursor } from "../lib/cursors";
 
 export function createOrbitCamera(canvas: HTMLCanvasElement) {
   const camera = new PerspectiveCamera(
@@ -24,11 +25,15 @@ export function createOrbitCamera(canvas: HTMLCanvasElement) {
   function onMouseDown(e: MouseEvent) {
     if (e.button === 2 && e.shiftKey) {
       controls.mouseButtons.RIGHT = MOUSE.PAN;
+      setCursor("grabbing");
+    } else if (e.button === 2) {
+      setCursor("orbit");
     }
   }
   function onMouseUp(e: MouseEvent) {
     if (e.button === 2) {
       controls.mouseButtons.RIGHT = MOUSE.ROTATE;
+      setCursor(null);
     }
   }
   canvas.addEventListener("mousedown", onMouseDown);
