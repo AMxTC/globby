@@ -126,6 +126,8 @@ export class GPURenderer {
   // World-position render target (for pointer picking)
   private worldPosTexture!: GPUTexture;
   private pickStagingBuffer!: GPUBuffer;
+  private regionStagingBuffer: GPUBuffer | null = null;
+  private regionStagingBusy = false;
 
   // Lines rendering
   private linesPipeline!: GPURenderPipeline;
@@ -532,6 +534,68 @@ export class GPURenderer {
       ? this.lastBakeShapeIds[shapeIdx]
       : null;
     return { worldPos, shapeId };
+  }
+
+  async pickRegionShapeIds(
+    x: number, y: number, w: number, h: number,
+  ): Promise<Set<string>> {
+    const texW = this.worldPosTexture.width;
+    const texH = this.worldPosTexture.height;
+
+    // Clamp rect to texture bounds
+    const x0 = Math.max(0, Math.min(Math.floor(x), texW - 1));
+    const y0 = Math.max(0, Math.min(Math.floor(y), texH - 1));
+    const x1 = Math.max(0, Math.min(Math.floor(x + w), texW));
+    const y1 = Math.max(0, Math.min(Math.floor(y + h), texH));
+    const rw = x1 - x0;
+    const rh = y1 - y0;
+    if (rw <= 0 || rh <= 0) return new Set();
+
+    // bytesPerRow must be multiple of 256 for WebGPU
+    const bytesPerPixel = 16; // rgba32float
+    const bytesPerRow = Math.ceil((rw * bytesPerPixel) / 256) * 256;
+    const bufferSize = bytesPerRow * rh;
+
+    // Reuse or create staging buffer (create fresh if previous is still mapped)
+    if (!this.regionStagingBuffer || this.regionStagingBuffer.size < bufferSize || this.regionStagingBusy) {
+      if (!this.regionStagingBusy) this.regionStagingBuffer?.destroy();
+      this.regionStagingBuffer = this.device.createBuffer({
+        size: bufferSize,
+        usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+      });
+    }
+
+    const buf = this.regionStagingBuffer;
+    this.regionStagingBusy = true;
+
+    const encoder = this.device.createCommandEncoder();
+    encoder.copyTextureToBuffer(
+      { texture: this.worldPosTexture, origin: [x0, y0, 0] },
+      { buffer: buf, bytesPerRow, rowsPerImage: rh },
+      [rw, rh, 1],
+    );
+    this.device.queue.submit([encoder.finish()]);
+
+    await buf.mapAsync(GPUMapMode.READ);
+    const data = new Float32Array(buf.getMappedRange());
+
+    const ids = new Set<string>();
+    const floatsPerRow = bytesPerRow / 4;
+    for (let row = 0; row < rh; row++) {
+      const rowOffset = row * floatsPerRow;
+      for (let col = 0; col < rw; col++) {
+        const alpha = data[rowOffset + col * 4 + 3];
+        if (alpha < 0.5) continue;
+        const shapeIdx = Math.round(alpha) - 1;
+        if (shapeIdx >= 0 && shapeIdx < this.lastBakeShapeIds.length) {
+          ids.add(this.lastBakeShapeIds[shapeIdx]);
+        }
+      }
+    }
+
+    buf.unmap();
+    this.regionStagingBusy = false;
+    return ids;
   }
 
   private async tryRebuildBakePipeline(code: string): Promise<void> {
@@ -982,6 +1046,7 @@ export class GPURenderer {
     this.chunkDistTexture?.destroy();
     this.worldPosTexture?.destroy();
     this.pickStagingBuffer?.destroy();
+    this.regionStagingBuffer?.destroy();
     this.bakeParamsBuffer?.destroy();
     this.shapeBuffer?.destroy();
     this.reduceParamsBuffer?.destroy();

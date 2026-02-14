@@ -15,6 +15,24 @@ import { themeState } from "./state/themeStore";
 import { setupHotkeys } from "./lib/hotkeys";
 import { bindCursorCanvas } from "./lib/cursors";
 
+function MarqueeOverlay({ marquee }: { marquee: { x1: number; y1: number; x2: number; y2: number } }) {
+  const isWindow = marquee.x2 >= marquee.x1;
+  const left = Math.min(marquee.x1, marquee.x2);
+  const top = Math.min(marquee.y1, marquee.y2);
+  const width = Math.abs(marquee.x2 - marquee.x1);
+  const height = Math.abs(marquee.y2 - marquee.y1);
+  return (
+    <div
+      className="fixed pointer-events-none z-20"
+      style={{
+        left, top, width, height,
+        border: isWindow ? '1px solid rgba(59,130,246,0.8)' : '1px dashed rgba(59,130,246,0.8)',
+        backgroundColor: isWindow ? 'rgba(59,130,246,0.08)' : 'rgba(59,130,246,0.05)',
+      }}
+    />
+  );
+}
+
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<GPURenderer | null>(null);
@@ -276,6 +294,7 @@ export default function App() {
           className="fixed top-4 left-4 font-mono text-xs pointer-events-none text-foreground"
         />
       )}
+      {snap.marquee && <MarqueeOverlay marquee={snap.marquee} />}
       <Toolbar />
       <SettingsPanel />
       <SidePanel />

@@ -127,6 +127,37 @@ export function rotatedAABBHalfExtents(
 }
 
 /**
+ * Project a shape's world AABB to a screen-space bounding rect.
+ * Returns null if any corner is behind the camera.
+ */
+export function worldAABBToScreenRect(
+  pos: Vec3,
+  size: Vec3,
+  rotation: Vec3,
+  scale: number,
+  vpMat: Matrix4,
+  screenW: number,
+  screenH: number,
+): { minX: number; minY: number; maxX: number; maxY: number } | null {
+  const he = rotatedAABBHalfExtents(size, rotation, scale);
+  let minX = Infinity, minY = Infinity;
+  let maxX = -Infinity, maxY = -Infinity;
+  // Project all 8 AABB corners
+  for (let i = 0; i < 8; i++) {
+    const cx = pos[0] + ((i & 1) ? he[0] : -he[0]);
+    const cy = pos[1] + ((i & 2) ? he[1] : -he[1]);
+    const cz = pos[2] + ((i & 4) ? he[2] : -he[2]);
+    const [sx, sy, visible] = worldToScreen([cx, cy, cz], vpMat, screenW, screenH);
+    if (!visible) return null;
+    if (sx < minX) minX = sx;
+    if (sy < minY) minY = sy;
+    if (sx > maxX) maxX = sx;
+    if (sy > maxY) maxY = sy;
+  }
+  return { minX, minY, maxX, maxY };
+}
+
+/**
  * Rodrigues' rotation: rotate vector v around unit axis by angle (radians).
  */
 export function rotateVecAroundAxis(v: Vec3, axis: Vec3, angle: number): Vec3 {

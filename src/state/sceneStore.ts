@@ -66,6 +66,7 @@ export const sceneState = proxy({
     previewPosition: [0, 0, 0] as Vec3,
     previewSize: [0.01, 0.01, 0.01] as Vec3,
   } as DragState,
+  marquee: null as { x1: number; y1: number; x2: number; y2: number } | null,
   fxError: null as string | null,
   fxCompiling: false,
   version: 1,
