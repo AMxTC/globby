@@ -10,6 +10,8 @@ import {
   selectAll,
   deleteSelectedShapes,
   cancelDrag,
+  setTool,
+  isShapeTool,
   enterEditMode,
   exitEditMode,
   undo,
@@ -93,6 +95,8 @@ const HOTKEYS: HotkeyDef[] = [
         exitEditMode();
       } else if (sceneState.drag.phase !== "idle") {
         cancelDrag();
+      } else if (isShapeTool(sceneState.activeTool)) {
+        setTool("select");
       } else {
         selectShape(null);
       }
