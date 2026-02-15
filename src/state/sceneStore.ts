@@ -8,11 +8,11 @@ export interface SDFShape {
   id: string;
   type: ShapeType;
   position: Vec3;
-  rotation: Vec3;   // Euler angles [rx, ry, rz] radians, XYZ intrinsic
+  rotation: Vec3; // Euler angles [rx, ry, rz] radians, XYZ intrinsic
   size: Vec3;
-  scale: number;    // Uniform scale (>0), default 1
+  scale: number; // Uniform scale (>0), default 1
   layerId: string;
-  fx?: string;      // WGSL function body, undefined = identity
+  fx?: string; // WGSL function body, undefined = identity
 }
 
 export interface Layer {
@@ -22,7 +22,7 @@ export interface Layer {
   opacity: number; // 0..1
   transferParam: number; // 0..1, mode-specific parameter
   visible: boolean;
-  fx?: string;     // WGSL function body, undefined = identity
+  fx?: string; // WGSL function body, undefined = identity
 }
 
 export interface DragState {
@@ -41,10 +41,25 @@ export interface DragState {
 
 export const sceneState = proxy({
   shapes: [
-    { id: "1", type: "box", position: [0, 0.5, 0] as Vec3, rotation: [0, 0, 0] as Vec3, size: [0.5, 0.5, 0.5] as Vec3, scale: 1, layerId: "1" },
+    {
+      id: "1",
+      type: "box",
+      position: [0, 0.5, 0] as Vec3,
+      rotation: [0, 0, 0] as Vec3,
+      size: [0.5, 0.5, 0.5] as Vec3,
+      scale: 1,
+      layerId: "1",
+    },
   ] as SDFShape[],
   layers: [
-    { id: "1", name: "Layer 1", transferMode: "union", opacity: 1, transferParam: 0.5, visible: true },
+    {
+      id: "1",
+      name: "Layer 1",
+      transferMode: "union",
+      opacity: 1,
+      transferParam: 0.5,
+      visible: true,
+    },
   ] as Layer[],
   activeLayerId: "1" as string,
   activeTool: "select" as "select" | ShapeType,
@@ -292,17 +307,18 @@ export function updateRadius(worldPoint: Vec3) {
 
 export function commitRadius() {
   if (sceneState.drag.phase !== "radius") return;
-  const { previewPosition, previewSize } = sceneState.drag;
+  const minRadius = 0.05;
+  const r = Math.max(sceneState.drag.previewSize[0], minRadius);
+  const [sx, , sz] = sceneState.drag.startPoint;
+  const floor = sceneState.drag.baseFloorY;
 
-  if (previewSize[0] > 0.02) {
-    addShape({
-      type: "sphere",
-      position: [...previewPosition] as Vec3,
-      rotation: [0, 0, 0],
-      size: [...previewSize] as Vec3,
-      scale: 1,
-    });
-  }
+  addShape({
+    type: "sphere",
+    position: [sx, floor + r, sz],
+    rotation: [0, 0, 0],
+    size: [r, r, r],
+    scale: 1,
+  });
 
   resetDrag();
 }
@@ -344,20 +360,16 @@ export function updateBase(worldPoint: Vec3) {
 
 export function lockBase() {
   if (sceneState.drag.phase !== "base") return;
-  const { baseHalfX, baseHalfZ, baseRadius } = sceneState.drag;
   const tool = sceneState.activeTool;
-  const threshold = 0.05;
+  const minBase = 0.01;
 
   if (tool === "box") {
-    if (baseHalfX < threshold && baseHalfZ < threshold) {
-      cancelDrag();
-      return;
-    }
+    sceneState.drag.baseHalfX = Math.max(sceneState.drag.baseHalfX, minBase);
+    sceneState.drag.baseHalfZ = Math.max(sceneState.drag.baseHalfZ, minBase);
   } else {
-    if (baseRadius < threshold) {
-      cancelDrag();
-      return;
-    }
+    sceneState.drag.baseRadius = Math.max(sceneState.drag.baseRadius, minBase);
+    sceneState.drag.baseHalfX = sceneState.drag.baseRadius;
+    sceneState.drag.baseHalfZ = sceneState.drag.baseRadius;
   }
 
   sceneState.drag.phase = "height";
@@ -370,7 +382,7 @@ export function updateHeight(worldY: number) {
   const floor = baseFloorY;
   const tool = sceneState.activeTool;
 
-  const height = Math.max(worldY - floor, 0.02);
+  const height = Math.max(worldY - floor, 0.01);
   const halfY = height / 2;
 
   if (tool === "box") {
@@ -388,15 +400,13 @@ export function commitHeight() {
   const { previewPosition, previewSize } = sceneState.drag;
   const tool = sceneState.activeTool;
 
-  if (previewSize[1] > 0.02) {
-    addShape({
-      type: tool as ShapeType,
-      position: [...previewPosition] as Vec3,
-      rotation: [0, 0, 0],
-      size: [...previewSize] as Vec3,
-      scale: 1,
-    });
-  }
+  addShape({
+    type: tool as ShapeType,
+    position: [...previewPosition] as Vec3,
+    rotation: [0, 0, 0],
+    size: [...previewSize] as Vec3,
+    scale: 1,
+  });
 
   resetDrag();
 }
@@ -518,7 +528,12 @@ export function rotateShape(id: string, newRotation: Vec3) {
   sceneState.version++;
 }
 
-export function scaleShape(id: string, newSize: Vec3, newPosition?: Vec3, newScale?: number) {
+export function scaleShape(
+  id: string,
+  newSize: Vec3,
+  newPosition?: Vec3,
+  newScale?: number,
+) {
   const shape = sceneState.shapes.find((s) => s.id === id);
   if (!shape) return;
   pushUndo();
@@ -550,7 +565,12 @@ export function moveShapes(ids: string[], delta: Vec3) {
   sceneState.version++;
 }
 
-export function rotateShapesAroundPivot(ids: string[], pivot: Vec3, axis: Vec3, angle: number) {
+export function rotateShapesAroundPivot(
+  ids: string[],
+  pivot: Vec3,
+  axis: Vec3,
+  angle: number,
+) {
   pushUndo();
   for (const id of ids) {
     const shape = sceneState.shapes.find((s) => s.id === id);
@@ -573,7 +593,11 @@ export function rotateShapesAroundPivot(ids: string[], pivot: Vec3, axis: Vec3, 
   sceneState.version++;
 }
 
-export function scaleShapesAroundPivot(ids: string[], pivot: Vec3, scaleFactor: number) {
+export function scaleShapesAroundPivot(
+  ids: string[],
+  pivot: Vec3,
+  scaleFactor: number,
+) {
   pushUndo();
   for (const id of ids) {
     const shape = sceneState.shapes.find((s) => s.id === id);
