@@ -474,20 +474,6 @@ export default function SidePanel() {
         title="Layers"
         collapsed={collapsed.layers}
         onToggle={() => toggleSection("layers")}
-        actions={
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7 text-muted-foreground hover:text-foreground"
-            onClick={(e) => {
-              e.stopPropagation();
-              addLayer();
-            }}
-            title="Add Layer"
-          >
-            <Plus size={16} />
-          </Button>
-        }
       />
       {!collapsed.layers && (
         <div
@@ -633,6 +619,12 @@ export default function SidePanel() {
                       )}
                     </div>
 
+                    {layer.fx != null && (
+                      <span title="Has fx" className="shrink-0 text-muted-foreground flex items-center">
+                        <SquareFunction size={14} />
+                      </span>
+                    )}
+
                     <div className="flex items-center shrink-0">
                       <button
                         className="p-0.5 rounded-sm text-muted-foreground hover:text-foreground hover:bg-accent disabled:opacity-25 disabled:pointer-events-none transition-colors"
@@ -656,23 +648,35 @@ export default function SidePanel() {
                       >
                         <ChevronDown size={14} />
                       </button>
-                      {snap.layers.length > 1 && (
-                        <button
-                          className="p-0.5 rounded-sm text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
-                          title="Delete Layer"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            removeLayer(layer.id);
-                          }}
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      )}
                     </div>
                   </div>
                 );
               })}
             </div>
+          </div>
+
+          {/* Add / Delete layer buttons */}
+          <div className="flex items-center gap-1 px-2 py-1.5 border-t border-border shrink-0 justify-end">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 text-muted-foreground hover:text-foreground"
+              onClick={() => addLayer()}
+              title="Add Layer"
+            >
+              <Plus size={16} />
+            </Button>
+            {snap.layers.length > 1 && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                onClick={() => removeLayer(snap.activeLayerId)}
+                title="Delete Layer"
+              >
+                <Trash2 size={16} />
+              </Button>
+            )}
           </div>
         </div>
       )}
