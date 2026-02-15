@@ -272,6 +272,7 @@ function collapseSection(
     collapsed: { ...collapsed, [key]: true },
     heights: {
       ...sectionHeights,
+      [key]: 0,
       [recipient]: sectionHeights[recipient] + sectionHeights[key],
     },
   };
@@ -284,9 +285,10 @@ function expandSection(
 ): { collapsed: Record<SectionKey, boolean>; heights: Record<SectionKey, number> } {
   const expandedKeys = getExpandedKeys(collapsed);
   const totalExpanded = expandedKeys.reduce((sum, k) => sum + sectionHeights[k], 0);
+
   const newCount = expandedKeys.length + 1;
   const share = totalExpanded / newCount;
-  const scale = (totalExpanded - share) / totalExpanded;
+  const scale = totalExpanded > 0 ? (totalExpanded - share) / totalExpanded : 0;
 
   const heights = { ...sectionHeights };
   for (const k of expandedKeys) {
@@ -384,7 +386,7 @@ export default function SidePanel() {
   return (
     <div
       ref={containerRef}
-      className="fixed top-0 right-0 h-full w-56 bg-accent border-l border-border flex flex-col z-50"
+      className="fixed top-0 right-0 h-full w-56 bg-accent border-l border-border flex flex-col z-50 overflow-hidden"
     >
       {/* === Settings Section === */}
       <SectionHeader
@@ -409,7 +411,7 @@ export default function SidePanel() {
       />
       {!collapsed.settings && (
         <div
-          className="overflow-y-auto overflow-x-hidden shrink-0"
+          className="overflow-y-auto overflow-x-hidden min-h-0"
           style={{ height: sectionHeights.settings }}
         >
           <SettingsBody />
@@ -448,7 +450,7 @@ export default function SidePanel() {
       />
       {!collapsed.layers && (
         <div
-          className="flex flex-col min-h-0 overflow-hidden shrink-0"
+          className="flex flex-col min-h-0 overflow-hidden"
           style={{ height: sectionHeights.layers }}
         >
           {/* Active layer controls */}
