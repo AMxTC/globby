@@ -13,6 +13,7 @@ export interface SDFShape {
   scale: number; // Uniform scale (>0), default 1
   layerId: string;
   fx?: string; // WGSL function body, undefined = identity
+  fxParams?: Vec3; // Runtime fx params [0..1] packed into GPU buffer
 }
 
 export interface Layer {
@@ -23,6 +24,7 @@ export interface Layer {
   transferParam: number; // 0..1, mode-specific parameter
   visible: boolean;
   fx?: string; // WGSL function body, undefined = identity
+  fxParams?: Vec3; // Runtime fx params [0..1] packed into GPU buffer
 }
 
 export interface DragState {
@@ -101,6 +103,7 @@ type ShapeSnapshot = {
   scale: number;
   layerId: string;
   fx?: string;
+  fxParams?: Vec3;
 }[];
 
 interface SceneSnapshot {
@@ -124,6 +127,7 @@ function snapshot(): SceneSnapshot {
       scale: s.scale,
       layerId: s.layerId,
       fx: s.fx,
+      fxParams: s.fxParams ? [...s.fxParams] as Vec3 : undefined,
     })),
     layers: sceneState.layers.map((l) => ({ ...l })),
     activeLayerId: sceneState.activeLayerId,
@@ -273,6 +277,20 @@ export function setLayerFx(id: string, fx: string | undefined) {
   const layer = sceneState.layers.find((l) => l.id === id);
   if (!layer) return;
   layer.fx = fx;
+  sceneState.version++;
+}
+
+export function setShapeFxParams(id: string, params: Vec3) {
+  const shape = sceneState.shapes.find((s) => s.id === id);
+  if (!shape) return;
+  shape.fxParams = params;
+  sceneState.version++;
+}
+
+export function setLayerFxParams(id: string, params: Vec3) {
+  const layer = sceneState.layers.find((l) => l.id === id);
+  if (!layer) return;
+  layer.fxParams = params;
   sceneState.version++;
 }
 
@@ -480,6 +498,7 @@ export function duplicateShape(id: string): string | null {
     scale: shape.scale,
     layerId: shape.layerId,
     fx: shape.fx,
+    fxParams: shape.fxParams ? [...shape.fxParams] as Vec3 : undefined,
   });
   sceneState.selectedShapeIds = [newId];
   sceneState.version++;
@@ -504,6 +523,7 @@ export function duplicateSelectedShapes(): string[] {
       scale: shape.scale,
       layerId: shape.layerId,
       fx: shape.fx,
+      fxParams: shape.fxParams ? [...shape.fxParams] as Vec3 : undefined,
     });
     newIds.push(newId);
   }

@@ -104,7 +104,7 @@ export function generateBakeShader(shapeFxSlots: FxSlot[], layerFxSlots: FxSlot[
 
   // Generate shape fx functions
   for (const { slot, code } of shapeFxSlots) {
-    parts.push(`fn shape_fx_${slot}(distance: f32, p: vec3<f32>, local_p: vec3<f32>) -> f32 {
+    parts.push(`fn shape_fx_${slot}(distance: f32, p: vec3<f32>, local_p: vec3<f32>, fx_params: vec3<f32>) -> f32 {
   ${code}
 }
 `);
@@ -112,7 +112,7 @@ export function generateBakeShader(shapeFxSlots: FxSlot[], layerFxSlots: FxSlot[
 
   // Generate layer fx functions
   for (const { slot, code } of layerFxSlots) {
-    parts.push(`fn layer_fx_${slot}(distance: f32, p: vec3<f32>) -> f32 {
+    parts.push(`fn layer_fx_${slot}(distance: f32, p: vec3<f32>, fx_params: vec3<f32>) -> f32 {
   ${code}
 }
 `);
@@ -140,7 +140,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     mainLines.push(`    let sfx = shapes[i].fx_info & 0xFFu;`);
     mainLines.push(`    switch sfx {`);
     for (const { slot } of shapeFxSlots) {
-      mainLines.push(`      case ${slot}u: { d_shape = shape_fx_${slot}(d_shape, world_pos, local_p); }`);
+      mainLines.push(`      case ${slot}u: { d_shape = shape_fx_${slot}(d_shape, world_pos, local_p, unpackShapeFxParams(shapes[i])); }`);
     }
     mainLines.push(`      default: {}`);
     mainLines.push(`    }`);
@@ -153,7 +153,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     mainLines.push(`    let lfx = (shapes[i].fx_info >> 8u) & 0xFFu;`);
     mainLines.push(`    switch lfx {`);
     for (const { slot } of layerFxSlots) {
-      mainLines.push(`      case ${slot}u: { d = layer_fx_${slot}(d, world_pos); }`);
+      mainLines.push(`      case ${slot}u: { d = layer_fx_${slot}(d, world_pos, unpackLayerFxParams(shapes[i])); }`);
     }
     mainLines.push(`      default: {}`);
     mainLines.push(`    }`);

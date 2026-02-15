@@ -13,9 +13,9 @@ struct Shape {
   rotation: vec3<f32>,   // euler angles
   scale: f32,            // uniform scale
   fx_info: u32,          // bits 0-7=shape_fx_slot, 8-15=layer_fx_slot (last shape in layer only)
-  _pad0: u32,
-  _pad1: u32,
-  _pad2: u32,
+  fx_packed0: u32,  // shape_p0(lo16) | shape_p1(hi16)
+  fx_packed1: u32,  // shape_p2(lo16) | layer_p0(hi16)
+  fx_packed2: u32,  // layer_p1(lo16) | layer_p2(hi16)
 }
 
 @group(0) @binding(0) var<uniform> params: BakeParams;
@@ -104,6 +104,46 @@ fn buildInvRotation(euler: vec3<f32>) -> mat3x3<f32> {
 }
 
 const SLOT_SIZE: u32 = 34u;
+
+fn unpackShapeFxParams(s: Shape) -> vec3<f32> {
+  return vec3<f32>(
+    f32(s.fx_packed0 & 0xFFFFu) / 65535.0,
+    f32(s.fx_packed0 >> 16u) / 65535.0,
+    f32(s.fx_packed1 & 0xFFFFu) / 65535.0,
+  );
+}
+
+fn unpackLayerFxParams(s: Shape) -> vec3<f32> {
+  return vec3<f32>(
+    f32(s.fx_packed1 >> 16u) / 65535.0,
+    f32(s.fx_packed2 & 0xFFFFu) / 65535.0,
+    f32(s.fx_packed2 >> 16u) / 65535.0,
+  );
+}
+
+fn hash33(p: vec3<f32>) -> vec3<f32> {
+  var q = vec3<f32>(
+    dot(p, vec3<f32>(127.1, 311.7, 74.7)),
+    dot(p, vec3<f32>(269.5, 183.3, 246.1)),
+    dot(p, vec3<f32>(113.5, 271.9, 124.6)),
+  );
+  return fract(sin(q) * 43758.5453123) * 2.0 - 1.0;
+}
+
+fn perlin(p: vec3<f32>) -> f32 {
+  let i = floor(p);
+  let f = fract(p);
+  let u = f * f * (3.0 - 2.0 * f);
+
+  return mix(mix(mix(dot(hash33(i + vec3(0,0,0)), f - vec3(0,0,0)),
+                     dot(hash33(i + vec3(1,0,0)), f - vec3(1,0,0)), u.x),
+                 mix(dot(hash33(i + vec3(0,1,0)), f - vec3(0,1,0)),
+                     dot(hash33(i + vec3(1,1,0)), f - vec3(1,1,0)), u.x), u.y),
+             mix(mix(dot(hash33(i + vec3(0,0,1)), f - vec3(0,0,1)),
+                     dot(hash33(i + vec3(1,0,1)), f - vec3(1,0,1)), u.x),
+                 mix(dot(hash33(i + vec3(0,1,1)), f - vec3(0,1,1)),
+                     dot(hash33(i + vec3(1,1,1)), f - vec3(1,1,1)), u.x), u.y), u.z);
+}
 
 // === MAIN (no-fx flat loop) ===
 

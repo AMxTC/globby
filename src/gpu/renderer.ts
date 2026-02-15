@@ -635,9 +635,9 @@ export class GPURenderer {
       layerOrder.set(layers[i].id, i);
     }
     const hiddenLayers = new Set<string>();
-    const layerInfo = new Map<string, { mode: TransferMode; opacity: number; param: number }>();
+    const layerInfo = new Map<string, { mode: TransferMode; opacity: number; param: number; fxParams: [number, number, number] }>();
     for (const l of layers) {
-      layerInfo.set(l.id, { mode: l.transferMode as TransferMode, opacity: l.opacity, param: l.transferParam });
+      layerInfo.set(l.id, { mode: l.transferMode as TransferMode, opacity: l.opacity, param: l.transferParam, fxParams: l.fxParams ?? [0, 0, 0] });
       if (!l.visible) hiddenLayers.add(l.id);
     }
 
@@ -752,9 +752,19 @@ export class GPURenderer {
         const isLastInLayer = layerLastShapeIdx.get(s.layerId) === i;
         const lfxSlot = isLastInLayer ? (layerIdToFxSlot.get(s.layerId) ?? 0) : 0;
         u32[off + 12] = (sfxSlot & 0xFF) | ((lfxSlot & 0xFF) << 8);
-        u32[off + 13] = 0; // _pad0
-        u32[off + 14] = 0; // _pad1
-        u32[off + 15] = 0; // _pad2
+        // Pack shape fx params (16-bit each)
+        const sfp = s.fxParams ?? [0, 0, 0];
+        const sp0 = Math.round(Math.max(0, Math.min(1, sfp[0])) * 65535);
+        const sp1 = Math.round(Math.max(0, Math.min(1, sfp[1])) * 65535);
+        const sp2 = Math.round(Math.max(0, Math.min(1, sfp[2])) * 65535);
+        // Pack layer fx params (on last shape of layer)
+        const lfp = isLastInLayer ? (info?.fxParams ?? [0, 0, 0]) : [0, 0, 0];
+        const lp0 = Math.round(Math.max(0, Math.min(1, lfp[0])) * 65535);
+        const lp1 = Math.round(Math.max(0, Math.min(1, lfp[1])) * 65535);
+        const lp2 = Math.round(Math.max(0, Math.min(1, lfp[2])) * 65535);
+        u32[off + 13] = (sp0 & 0xFFFF) | ((sp1 & 0xFFFF) << 16);
+        u32[off + 14] = (sp2 & 0xFFFF) | ((lp0 & 0xFFFF) << 16);
+        u32[off + 15] = (lp1 & 0xFFFF) | ((lp2 & 0xFFFF) << 16);
       }
       this.device.queue.writeBuffer(this.shapeBuffer, 0, buf);
     }

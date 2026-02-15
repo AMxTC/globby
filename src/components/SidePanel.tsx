@@ -40,6 +40,8 @@ import {
   scaleShape,
   setShapeFx,
   setLayerFx,
+  setShapeFxParams,
+  setLayerFxParams,
 } from "../state/sceneStore";
 import { FxEditor } from "./FxEditor";
 import type { Layer, Vec3 } from "../state/sceneStore";
@@ -117,6 +119,8 @@ function FxSection({
   onToggleExpand,
   code,
   onChange,
+  fxParams,
+  onFxParamsChange,
   error,
   compiling,
 }: {
@@ -126,6 +130,8 @@ function FxSection({
   onToggleExpand: () => void;
   code: string;
   onChange: (code: string) => void;
+  fxParams: Vec3;
+  onFxParamsChange: (params: Vec3) => void;
   error: string | null;
   compiling?: boolean;
 }) {
@@ -165,6 +171,8 @@ function FxSection({
           <FxEditor
             code={code}
             onChange={onChange}
+            fxParams={fxParams}
+            onFxParamsChange={onFxParamsChange}
             error={error}
             readOnly={!enabled}
           />
@@ -543,6 +551,8 @@ export default function SidePanel() {
                 onToggleExpand={() => setShowLayerFx(!showLayerFx)}
                 code={activeLayer.fx ?? "return distance;"}
                 onChange={(c) => setLayerFx(activeLayer.id, c)}
+                fxParams={(activeLayer.fxParams ?? [0, 0, 0]) as Vec3}
+                onFxParamsChange={(p) => setLayerFxParams(activeLayer.id, p)}
                 error={snap.fxError}
                 compiling={snap.fxCompiling}
               />
@@ -713,6 +723,7 @@ export default function SidePanel() {
               layerId={selectedShape.layerId}
               layers={snap.layers as Layer[]}
               fx={selectedShape.fx}
+              fxParams={(selectedShape.fxParams ?? [0, 0, 0]) as Vec3}
               fxError={snap.fxError}
               showShapeFx={showShapeFx}
               onToggleShapeFx={() => setShowShapeFx(!showShapeFx)}
@@ -884,6 +895,7 @@ function PropertiesContent({
   layerId,
   layers,
   fx,
+  fxParams,
   fxError,
   showShapeFx,
   onToggleShapeFx,
@@ -897,6 +909,7 @@ function PropertiesContent({
   layerId: string;
   layers: Layer[];
   fx?: string;
+  fxParams: Vec3;
   fxError: string | null;
   showShapeFx: boolean;
   onToggleShapeFx: () => void;
@@ -1032,6 +1045,8 @@ function PropertiesContent({
         onToggleExpand={onToggleShapeFx}
         code={fx ?? "return distance;"}
         onChange={(c) => setShapeFx(shapeId, c)}
+        fxParams={fxParams}
+        onFxParamsChange={(p) => setShapeFxParams(shapeId, p)}
         error={fxError}
       />
     </div>
