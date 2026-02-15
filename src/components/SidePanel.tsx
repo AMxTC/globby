@@ -49,6 +49,7 @@ const TRANSFER_MODES: { value: TransferMode; label: string }[] = [
   { value: "union", label: "Union" },
   { value: "smooth_union", label: "Smooth Union" },
   { value: "subtract", label: "Subtract" },
+  { value: "smooth_subtract", label: "Smooth Subtract" },
   { value: "intersect", label: "Intersect" },
   { value: "addition", label: "Addition" },
   { value: "multiply", label: "Multiply" },
@@ -58,6 +59,7 @@ const TRANSFER_MODES: { value: TransferMode; label: string }[] = [
 
 const MODE_PARAM: Partial<Record<TransferMode, string>> = {
   smooth_union: "Smoothness",
+  smooth_subtract: "Smoothness",
   pipe: "Thickness",
   engrave: "Depth",
 };
@@ -100,7 +102,9 @@ function SectionHeader({
         )}
       />
       <Icon size={14} className="text-muted-foreground" />
-      <span className="text-xs font-medium text-foreground flex-1">{title}</span>
+      <span className="text-xs font-medium text-foreground flex-1">
+        {title}
+      </span>
       {actions}
     </div>
   );
@@ -142,13 +146,18 @@ function FxSection({
           <span>Fx</span>
         </button>
         {compiling && (
-          <span className="text-[10px] text-muted-foreground animate-pulse ml-1">compiling...</span>
+          <span className="text-[10px] text-muted-foreground animate-pulse ml-1">
+            compiling...
+          </span>
         )}
         <button
           className="p-0.5 rounded-sm text-muted-foreground hover:text-foreground transition-colors ml-auto"
           onClick={onToggleExpand}
         >
-          <ChevronRight size={12} className={cn("transition-transform", expanded && "rotate-90")} />
+          <ChevronRight
+            size={12}
+            className={cn("transition-transform", expanded && "rotate-90")}
+          />
         </button>
       </div>
       {expanded && (
@@ -188,7 +197,9 @@ function DragDivider({
 
 function useDividerDrag(
   sectionHeights: Record<SectionKey, number>,
-  setSectionHeights: React.Dispatch<React.SetStateAction<Record<SectionKey, number>>>,
+  setSectionHeights: React.Dispatch<
+    React.SetStateAction<Record<SectionKey, number>>
+  >,
 ) {
   // Snapshot start state on pointer down, use delta approach on move
   const dragState = useRef<{
@@ -221,7 +232,13 @@ function useDividerDrag(
 
       const delta = e.clientY - drag.startY;
       const totalSpace = drag.startAboveHeight + drag.startBelowHeight;
-      const newAbove = Math.max(MIN_SECTION_HEIGHT, Math.min(totalSpace - MIN_SECTION_HEIGHT, drag.startAboveHeight + delta));
+      const newAbove = Math.max(
+        MIN_SECTION_HEIGHT,
+        Math.min(
+          totalSpace - MIN_SECTION_HEIGHT,
+          drag.startAboveHeight + delta,
+        ),
+      );
       const newBelow = totalSpace - newAbove;
 
       setSectionHeights((prev) => ({
@@ -246,12 +263,17 @@ function getExpandedKeys(collapsed: Record<SectionKey, boolean>): SectionKey[] {
   return SECTION_KEYS.filter((k) => !collapsed[k]);
 }
 
-function initSectionHeights(containerHeight: number, collapsed: Record<SectionKey, boolean>): Record<SectionKey, number> {
+function initSectionHeights(
+  containerHeight: number,
+  collapsed: Record<SectionKey, boolean>,
+): Record<SectionKey, number> {
   const expandedKeys = getExpandedKeys(collapsed);
-  if (expandedKeys.length === 0) return { settings: 0, layers: 0, properties: 0 };
+  if (expandedKeys.length === 0)
+    return { settings: 0, layers: 0, properties: 0 };
   const headerTotal = SECTION_KEYS.length * HEADER_HEIGHT;
   const dividerCount = Math.max(0, expandedKeys.length - 1);
-  const available = containerHeight - headerTotal - dividerCount * DIVIDER_HEIGHT;
+  const available =
+    containerHeight - headerTotal - dividerCount * DIVIDER_HEIGHT;
   const each = Math.max(MIN_SECTION_HEIGHT, available / expandedKeys.length);
   return { settings: each, layers: each, properties: each };
 }
@@ -260,13 +282,18 @@ function collapseSection(
   key: SectionKey,
   collapsed: Record<SectionKey, boolean>,
   sectionHeights: Record<SectionKey, number>,
-): { collapsed: Record<SectionKey, boolean>; heights: Record<SectionKey, number> } | null {
+): {
+  collapsed: Record<SectionKey, boolean>;
+  heights: Record<SectionKey, number>;
+} | null {
   const expandedKeys = getExpandedKeys(collapsed);
   if (expandedKeys.length <= 1) return null;
 
   const idx = SECTION_KEYS.indexOf(key);
   const remaining = expandedKeys.filter((k) => k !== key);
-  const recipient = remaining.find((k) => SECTION_KEYS.indexOf(k) > idx) ?? remaining[remaining.length - 1];
+  const recipient =
+    remaining.find((k) => SECTION_KEYS.indexOf(k) > idx) ??
+    remaining[remaining.length - 1];
 
   return {
     collapsed: { ...collapsed, [key]: true },
@@ -282,9 +309,15 @@ function expandSection(
   key: SectionKey,
   collapsed: Record<SectionKey, boolean>,
   sectionHeights: Record<SectionKey, number>,
-): { collapsed: Record<SectionKey, boolean>; heights: Record<SectionKey, number> } {
+): {
+  collapsed: Record<SectionKey, boolean>;
+  heights: Record<SectionKey, number>;
+} {
   const expandedKeys = getExpandedKeys(collapsed);
-  const totalExpanded = expandedKeys.reduce((sum, k) => sum + sectionHeights[k], 0);
+  const totalExpanded = expandedKeys.reduce(
+    (sum, k) => sum + sectionHeights[k],
+    0,
+  );
 
   const newCount = expandedKeys.length + 1;
   const share = totalExpanded / newCount;
@@ -315,7 +348,9 @@ export default function SidePanel() {
     properties: false,
   });
 
-  const [sectionHeights, setSectionHeights] = useState<Record<SectionKey, number>>({
+  const [sectionHeights, setSectionHeights] = useState<
+    Record<SectionKey, number>
+  >({
     settings: 0,
     layers: 0,
     properties: 0,
@@ -325,20 +360,26 @@ export default function SidePanel() {
   const initializedRef = useRef(false);
 
   const activeLayer = snap.layers.find((l) => l.id === snap.activeLayerId);
-  const selectedShape = snap.selectedShapeIds.length === 1
-    ? snap.shapes.find((s) => s.id === snap.selectedShapeIds[0])
-    : null;
+  const selectedShape =
+    snap.selectedShapeIds.length === 1
+      ? snap.shapes.find((s) => s.id === snap.selectedShapeIds[0])
+      : null;
 
   // Initialize section heights from container on first render
   useEffect(() => {
     if (initializedRef.current || !containerRef.current) return;
-    setSectionHeights(initSectionHeights(containerRef.current.clientHeight, collapsed));
+    setSectionHeights(
+      initSectionHeights(containerRef.current.clientHeight, collapsed),
+    );
     initializedRef.current = true;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const { onPointerDown: dividerPointerDown, onPointerMove: dividerPointerMove, onPointerUp: dividerPointerUp } =
-    useDividerDrag(sectionHeights, setSectionHeights);
+  const {
+    onPointerDown: dividerPointerDown,
+    onPointerMove: dividerPointerMove,
+    onPointerUp: dividerPointerUp,
+  } = useDividerDrag(sectionHeights, setSectionHeights);
 
   function toggleSection(key: SectionKey) {
     if (!collapsed[key]) {
@@ -458,7 +499,7 @@ export default function SidePanel() {
             <div className="px-3 py-2.5 border-b border-border space-y-2 shrink-0">
               <div className="flex items-center gap-2">
                 <label className="text-[11px] text-muted-foreground w-10 shrink-0">
-                  Opacity
+                  Strength
                 </label>
                 <Fader
                   value={activeLayer.opacity}
@@ -506,7 +547,12 @@ export default function SidePanel() {
               )}
               <FxSection
                 enabled={activeLayer.fx != null}
-                onToggle={() => setLayerFx(activeLayer.id, activeLayer.fx != null ? undefined : "return distance;")}
+                onToggle={() =>
+                  setLayerFx(
+                    activeLayer.id,
+                    activeLayer.fx != null ? undefined : "return distance;",
+                  )
+                }
                 expanded={showLayerFx}
                 onToggleExpand={() => setShowLayerFx(!showLayerFx)}
                 code={activeLayer.fx ?? "return distance;"}
@@ -726,7 +772,12 @@ function SettingsBody() {
         <Toggle
           pressed={snap.renderMode !== 0}
           onPressedChange={() => {
-            sceneState.renderMode = ((snap.renderMode + 1) % 5) as 0 | 1 | 2 | 3 | 4;
+            sceneState.renderMode = ((snap.renderMode + 1) % 5) as
+              | 0
+              | 1
+              | 2
+              | 3
+              | 4;
           }}
           size="icon"
           title={`Render: ${RENDER_LABELS[snap.renderMode]}`}
@@ -896,7 +947,10 @@ function PropertiesContent({
         </span>
         <div className="flex items-center gap-1">
           {(["X", "Y", "Z"] as const).map((axis, i) => (
-            <div key={axis} className="flex-1 min-w-0 flex items-center gap-0.5">
+            <div
+              key={axis}
+              className="flex-1 min-w-0 flex items-center gap-0.5"
+            >
               <label className="text-[10px] text-muted-foreground shrink-0">
                 {axis}
               </label>
@@ -922,7 +976,10 @@ function PropertiesContent({
         </span>
         <div className="flex items-center gap-1">
           {(["X", "Y", "Z"] as const).map((axis, i) => (
-            <div key={axis} className="flex-1 min-w-0 flex items-center gap-0.5">
+            <div
+              key={axis}
+              className="flex-1 min-w-0 flex items-center gap-0.5"
+            >
               <label className="text-[10px] text-muted-foreground shrink-0">
                 {axis}
               </label>
@@ -964,7 +1021,9 @@ function PropertiesContent({
 
       <FxSection
         enabled={fx != null}
-        onToggle={() => setShapeFx(shapeId, fx != null ? undefined : "return distance;")}
+        onToggle={() =>
+          setShapeFx(shapeId, fx != null ? undefined : "return distance;")
+        }
         expanded={showShapeFx}
         onToggleExpand={onToggleShapeFx}
         code={fx ?? "return distance;"}

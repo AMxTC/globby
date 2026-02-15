@@ -70,6 +70,12 @@ function generateTransferBlock(shapeVar: string): string {
         let engrave_d = max(d, -(abs(d_shape) - depth));
         d = mix(d, engrave_d, opacity);
       }
+      // 8: smooth subtract — param controls smoothness (0..0.5)
+      case 8u: {
+        let k = param * 0.5;
+        let neg_d_shape = mix(d, -d_shape, opacity);
+        d = -smin(-d, -neg_d_shape, k);
+      }
       default: { d = min(d, d_scaled); }
     }`;
 }
