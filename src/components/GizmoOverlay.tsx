@@ -31,7 +31,8 @@ const ARROW_HEAD_PX = 10;
 const SCALE_HANDLE_SIZE = 8;
 const CP_RADIUS = 5;
 const MIN_SIZE = 0.02;
-const ARC_SAMPLES = 48;
+const ARC_SAMPLES = 16;
+const ARC_RADIUS_FRACTION = 0.85;
 const ROTATION_SNAP = Math.PI / 2; // 90 degrees
 
 interface DragInfo {
@@ -42,14 +43,14 @@ interface DragInfo {
   startT: number;
   startPos: Vec3;
   startSize: Vec3;
-  axisDir: Vec3;         // world-space direction of the dragged local axis
-  startRotation: Vec3;   // for rotation undo
-  startScale: number;    // for scale undo
-  negative?: boolean;    // for scale: negative-side handle
+  axisDir: Vec3; // world-space direction of the dragged local axis
+  startRotation: Vec3; // for rotation undo
+  startScale: number; // for scale undo
+  negative?: boolean; // for scale: negative-side handle
   duplicatedFrom?: string; // set when alt+drag created a duplicate
-  startAngle?: number;   // for rotation drag
-  pivotPos: Vec3;                  // centroid (single: same as startPos)
-  multiShapeIds?: string[];        // set for multi-select drags
+  startAngle?: number; // for rotation drag
+  pivotPos: Vec3; // centroid (single: same as startPos)
+  multiShapeIds?: string[]; // set for multi-select drags
   multiStartPositions?: Vec3[];
   multiStartRotations?: Vec3[];
   multiStartScales?: number[];
@@ -59,15 +60,22 @@ interface DragInfo {
 function getLocalAxes(rotation: Vec3): Vec3[] {
   const m = eulerToMatrix3(rotation[0], rotation[1], rotation[2]);
   return [
-    [m[0], m[1], m[2]],  // local X
-    [m[3], m[4], m[5]],  // local Y
-    [m[6], m[7], m[8]],  // local Z
+    [m[0], m[1], m[2]], // local X
+    [m[3], m[4], m[5]], // local Y
+    [m[6], m[7], m[8]], // local Z
   ];
 }
 
 /** Transform a local-space offset to world-space position */
-function localToWorld(pos: Vec3, m: number[], s: number, localOffset: Vec3): Vec3 {
-  const lx = localOffset[0] * s, ly = localOffset[1] * s, lz = localOffset[2] * s;
+function localToWorld(
+  pos: Vec3,
+  m: number[],
+  s: number,
+  localOffset: Vec3,
+): Vec3 {
+  const lx = localOffset[0] * s,
+    ly = localOffset[1] * s,
+    lz = localOffset[2] * s;
   return [
     pos[0] + m[0] * lx + m[3] * ly + m[6] * lz,
     pos[1] + m[1] * lx + m[4] * ly + m[7] * lz,
@@ -223,16 +231,28 @@ export default function GizmoOverlay() {
         pos = shape.position;
         localAxes = getLocalAxes(shape.rotation);
       } else {
-        let cx2 = 0, cy2 = 0, cz2 = 0, count = 0;
+        let cx2 = 0,
+          cy2 = 0,
+          cz2 = 0,
+          count = 0;
         for (const id of selectedIds) {
           const s = sceneState.shapes.find((sh) => sh.id === id);
           if (!s) continue;
-          cx2 += s.position[0]; cy2 += s.position[1]; cz2 += s.position[2];
+          cx2 += s.position[0];
+          cy2 += s.position[1];
+          cz2 += s.position[2];
           count++;
         }
-        if (count === 0) { g.style.display = "none"; return; }
+        if (count === 0) {
+          g.style.display = "none";
+          return;
+        }
         pos = [cx2 / count, cy2 / count, cz2 / count];
-        localAxes = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]; // world axes for multi
+        localAxes = [
+          [1, 0, 0],
+          [0, 1, 0],
+          [0, 0, 1],
+        ]; // world axes for multi
       }
 
       g.style.display = "";
@@ -334,28 +354,33 @@ export default function GizmoOverlay() {
           scaleDash.style.display = "none";
         }
 
-        // Rotation arc: circle in the plane perpendicular to this local axis
-        const arcRadius = armLen * 1.15;
-        // Basis vectors for the arc plane: use the other two local axes
-        const basis0 = localAxes[(axisIdx + 1) % 3];
-        const basis1 = localAxes[(axisIdx + 2) % 3];
+        // Rotation arc: 90° quarter-arc in the negative quadrant
+        const arcRadius = armLen * ARC_RADIUS_FRACTION;
+        // Sweep from -axis1 to -axis2 (negative directions of the other two axes)
+        const b0 = localAxes[(axisIdx + 1) % 3];
+        const b1 = localAxes[(axisIdx + 2) % 3];
+        const negBasis0: Vec3 = [-b0[0], -b0[1], -b0[2]];
+        const negBasis1: Vec3 = [-b1[0], -b1[1], -b1[2]];
 
         let arcD = "M";
         let allVisible = true;
         for (let j = 0; j <= ARC_SAMPLES; j++) {
-          const angle = (j / ARC_SAMPLES) * Math.PI * 2;
+          const t = j / ARC_SAMPLES;
+          const angle = t * (Math.PI / 2); // 0 to 90°
           const cs = Math.cos(angle);
           const sn = Math.sin(angle);
           const wp: Vec3 = [
-            pos[0] + (basis0[0] * cs + basis1[0] * sn) * arcRadius,
-            pos[1] + (basis0[1] * cs + basis1[1] * sn) * arcRadius,
-            pos[2] + (basis0[2] * cs + basis1[2] * sn) * arcRadius,
+            pos[0] + (negBasis0[0] * cs + negBasis1[0] * sn) * arcRadius,
+            pos[1] + (negBasis0[1] * cs + negBasis1[1] * sn) * arcRadius,
+            pos[2] + (negBasis0[2] * cs + negBasis1[2] * sn) * arcRadius,
           ];
           const [apx, apy, apv] = worldToScreen(wp, vpMat, w, h);
-          if (!apv) { allVisible = false; break; }
+          if (!apv) {
+            allVisible = false;
+            break;
+          }
           arcD += `${j > 0 ? " L" : ""} ${apx},${apy}`;
         }
-        arcD += " Z";
 
         if (allVisible) {
           arcPath.style.display = "";
@@ -429,7 +454,11 @@ export default function GizmoOverlay() {
         currentLocalAxes = getLocalAxes(primaryShape.rotation);
         axisDir = currentLocalAxes[axisIdx];
       } else {
-        currentLocalAxes = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+        currentLocalAxes = [
+          [1, 0, 0],
+          [0, 1, 0],
+          [0, 0, 1],
+        ];
         axisDir = currentLocalAxes[axisIdx];
       }
 
@@ -438,11 +467,16 @@ export default function GizmoOverlay() {
       if (isSingle) {
         pivotPos = [...primaryShape.position] as Vec3;
       } else {
-        let px = 0, py = 0, pz = 0, cnt = 0;
+        let px = 0,
+          py = 0,
+          pz = 0,
+          cnt = 0;
         for (const id of selectedIds) {
           const s = sceneState.shapes.find((sh) => sh.id === id);
           if (!s) continue;
-          px += s.position[0]; py += s.position[1]; pz += s.position[2];
+          px += s.position[0];
+          py += s.position[1];
+          pz += s.position[2];
           cnt++;
         }
         pivotPos = [px / cnt, py / cnt, pz / cnt];
@@ -469,7 +503,12 @@ export default function GizmoOverlay() {
 
       if (role === "translate") {
         const startT = projectRayOnAxisDir(
-          camera, canvas, e.clientX, e.clientY, pivotPos, axisDir,
+          camera,
+          canvas,
+          e.clientX,
+          e.clientY,
+          pivotPos,
+          axisDir,
         );
 
         if (e.altKey) {
@@ -478,8 +517,11 @@ export default function GizmoOverlay() {
             if (newId) {
               const clonedShape = sceneState.shapes.find((s) => s.id === newId);
               dragRef.current = {
-                kind: "translate", axis, axisIdx,
-                shapeId: newId, startT,
+                kind: "translate",
+                axis,
+                axisIdx,
+                shapeId: newId,
+                startT,
                 startPos: [...clonedShape!.position] as Vec3,
                 startSize: [...clonedShape!.size] as Vec3,
                 axisDir,
@@ -504,8 +546,11 @@ export default function GizmoOverlay() {
                 newMultiScales.push(s.scale);
               }
               dragRef.current = {
-                kind: "translate", axis, axisIdx,
-                shapeId: newIds[0], startT,
+                kind: "translate",
+                axis,
+                axisIdx,
+                shapeId: newIds[0],
+                startT,
                 startPos: [...pivotPos] as Vec3,
                 startSize: [0, 0, 0],
                 axisDir,
@@ -522,25 +567,39 @@ export default function GizmoOverlay() {
           }
         } else {
           dragRef.current = {
-            kind: "translate", axis, axisIdx,
-            shapeId: primaryId, startT,
+            kind: "translate",
+            axis,
+            axisIdx,
+            shapeId: primaryId,
+            startT,
             startPos: [...primaryShape.position] as Vec3,
             startSize: [...primaryShape.size] as Vec3,
             axisDir,
             startRotation: [...primaryShape.rotation] as Vec3,
             startScale: primaryShape.scale,
             pivotPos,
-            multiShapeIds, multiStartPositions, multiStartRotations, multiStartScales,
+            multiShapeIds,
+            multiStartPositions,
+            multiStartRotations,
+            multiStartScales,
           };
         }
       } else if (role === "scale") {
         const startT = projectRayOnAxisDir(
-          camera, canvas, e.clientX, e.clientY, pivotPos, axisDir,
+          camera,
+          canvas,
+          e.clientX,
+          e.clientY,
+          pivotPos,
+          axisDir,
         );
         const negative = target.dataset.negative === "1";
         dragRef.current = {
-          kind: "scale", axis, axisIdx,
-          shapeId: primaryId, startT,
+          kind: "scale",
+          axis,
+          axisIdx,
+          shapeId: primaryId,
+          startT,
           startPos: [...primaryShape.position] as Vec3,
           startSize: [...primaryShape.size] as Vec3,
           axisDir,
@@ -548,12 +607,20 @@ export default function GizmoOverlay() {
           startScale: primaryShape.scale,
           negative,
           pivotPos,
-          multiShapeIds, multiStartPositions, multiStartRotations, multiStartScales,
+          multiShapeIds,
+          multiStartPositions,
+          multiStartRotations,
+          multiStartScales,
         };
       } else if (role === "rotate") {
         const planeNormal = axisDir;
         const hitPoint = projectRayOnPlane(
-          camera, canvas, e.clientX, e.clientY, pivotPos, planeNormal,
+          camera,
+          canvas,
+          e.clientX,
+          e.clientY,
+          pivotPos,
+          planeNormal,
         );
         let startAngle = 0;
         if (hitPoint) {
@@ -567,8 +634,11 @@ export default function GizmoOverlay() {
           startAngle = Math.atan2(proj1, proj0);
         }
         dragRef.current = {
-          kind: "rotate", axis, axisIdx,
-          shapeId: primaryId, startT: 0,
+          kind: "rotate",
+          axis,
+          axisIdx,
+          shapeId: primaryId,
+          startT: 0,
           startPos: [...primaryShape.position] as Vec3,
           startSize: [...primaryShape.size] as Vec3,
           axisDir,
@@ -576,18 +646,29 @@ export default function GizmoOverlay() {
           startScale: primaryShape.scale,
           startAngle,
           pivotPos,
-          multiShapeIds, multiStartPositions, multiStartRotations, multiStartScales,
+          multiShapeIds,
+          multiStartPositions,
+          multiStartRotations,
+          multiStartScales,
         };
       } else if (role === "editCp") {
         // Edit mode only for single selection
         if (!isSingle) return;
         const startT = projectRayOnAxisDir(
-          camera, canvas, e.clientX, e.clientY, primaryShape.position, axisDir,
+          camera,
+          canvas,
+          e.clientX,
+          e.clientY,
+          primaryShape.position,
+          axisDir,
         );
         const negative = target.dataset.negative === "1";
         dragRef.current = {
-          kind: "editFace", axis, axisIdx,
-          shapeId: primaryId, startT,
+          kind: "editFace",
+          axis,
+          axisIdx,
+          shapeId: primaryId,
+          startT,
           startPos: [...primaryShape.position] as Vec3,
           startSize: [...primaryShape.size] as Vec3,
           axisDir,
@@ -609,12 +690,18 @@ export default function GizmoOverlay() {
       e.preventDefault();
       e.stopPropagation();
 
-      const isMulti = drag.multiShapeIds != null && drag.multiShapeIds.length > 0;
+      const isMulti =
+        drag.multiShapeIds != null && drag.multiShapeIds.length > 0;
 
       if (drag.kind === "rotate") {
         // Rotation drag: intersect with rotation plane
         const hitPoint = projectRayOnPlane(
-          camera, canvas, e.clientX, e.clientY, drag.pivotPos, drag.axisDir,
+          camera,
+          canvas,
+          e.clientX,
+          e.clientY,
+          drag.pivotPos,
+          drag.axisDir,
         );
         if (!hitPoint) return;
 
@@ -622,7 +709,11 @@ export default function GizmoOverlay() {
         let basis0: Vec3, basis1: Vec3;
         if (isMulti) {
           // World axes
-          const worldAxes: Vec3[] = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+          const worldAxes: Vec3[] = [
+            [1, 0, 0],
+            [0, 1, 0],
+            [0, 0, 1],
+          ];
           basis0 = worldAxes[(drag.axisIdx + 1) % 3];
           basis1 = worldAxes[(drag.axisIdx + 2) % 3];
         } else {
@@ -645,16 +736,27 @@ export default function GizmoOverlay() {
 
         if (isMulti) {
           // Multi-select: orbit all shapes around pivot
-          const { multiShapeIds, multiStartPositions, multiStartRotations } = drag;
+          const { multiShapeIds, multiStartPositions, multiStartRotations } =
+            drag;
           for (let i = 0; i < multiShapeIds!.length; i++) {
-            const s = sceneState.shapes.find((sh) => sh.id === multiShapeIds![i]);
+            const s = sceneState.shapes.find(
+              (sh) => sh.id === multiShapeIds![i],
+            );
             if (!s) continue;
             const startP = multiStartPositions![i];
             const startR = multiStartRotations![i];
             // Orbit position
-            const rel: Vec3 = [startP[0] - drag.pivotPos[0], startP[1] - drag.pivotPos[1], startP[2] - drag.pivotPos[2]];
+            const rel: Vec3 = [
+              startP[0] - drag.pivotPos[0],
+              startP[1] - drag.pivotPos[1],
+              startP[2] - drag.pivotPos[2],
+            ];
             const rotated = rotateVecAroundAxis(rel, drag.axisDir, deltaAngle);
-            s.position = [drag.pivotPos[0] + rotated[0], drag.pivotPos[1] + rotated[1], drag.pivotPos[2] + rotated[2]];
+            s.position = [
+              drag.pivotPos[0] + rotated[0],
+              drag.pivotPos[1] + rotated[1],
+              drag.pivotPos[2] + rotated[2],
+            ];
             // Compose rotation
             s.rotation = composeWorldRotation(startR, drag.axisDir, deltaAngle);
           }
@@ -671,7 +773,12 @@ export default function GizmoOverlay() {
       }
 
       const currentT = projectRayOnAxisDir(
-        camera, canvas, e.clientX, e.clientY, drag.pivotPos, drag.axisDir,
+        camera,
+        canvas,
+        e.clientX,
+        e.clientY,
+        drag.pivotPos,
+        drag.axisDir,
       );
       const delta = currentT - drag.startT;
 
@@ -679,7 +786,9 @@ export default function GizmoOverlay() {
         if (isMulti) {
           const { multiShapeIds, multiStartPositions } = drag;
           for (let i = 0; i < multiShapeIds!.length; i++) {
-            const s = sceneState.shapes.find((sh) => sh.id === multiShapeIds![i]);
+            const s = sceneState.shapes.find(
+              (sh) => sh.id === multiShapeIds![i],
+            );
             if (!s) continue;
             const sp = multiStartPositions![i];
             s.position = [
@@ -705,7 +814,9 @@ export default function GizmoOverlay() {
           const scaleFactor = Math.max(0.01, 1 + d);
           const { multiShapeIds, multiStartPositions, multiStartScales } = drag;
           for (let i = 0; i < multiShapeIds!.length; i++) {
-            const s = sceneState.shapes.find((sh) => sh.id === multiShapeIds![i]);
+            const s = sceneState.shapes.find(
+              (sh) => sh.id === multiShapeIds![i],
+            );
             if (!s) continue;
             const sp = multiStartPositions![i];
             s.position = [
@@ -739,16 +850,26 @@ export default function GizmoOverlay() {
       const canvas = sceneRefs.canvas;
       if (!camera || !canvas) return;
 
-      const isMulti = drag.multiShapeIds != null && drag.multiShapeIds.length > 0;
+      const isMulti =
+        drag.multiShapeIds != null && drag.multiShapeIds.length > 0;
 
       if (drag.kind === "rotate") {
         // Compute final delta angle
         const hitPoint = projectRayOnPlane(
-          camera, canvas, e.clientX, e.clientY, drag.pivotPos, drag.axisDir,
+          camera,
+          canvas,
+          e.clientX,
+          e.clientY,
+          drag.pivotPos,
+          drag.axisDir,
         );
         let basis0: Vec3, basis1: Vec3;
         if (isMulti) {
-          const worldAxes: Vec3[] = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+          const worldAxes: Vec3[] = [
+            [1, 0, 0],
+            [0, 1, 0],
+            [0, 0, 1],
+          ];
           basis0 = worldAxes[(drag.axisIdx + 1) % 3];
           basis1 = worldAxes[(drag.axisIdx + 2) % 3];
         } else {
@@ -772,15 +893,23 @@ export default function GizmoOverlay() {
 
         if (isMulti) {
           // Restore all shapes to start state, then commit via batch function
-          const { multiShapeIds, multiStartPositions, multiStartRotations } = drag;
+          const { multiShapeIds, multiStartPositions, multiStartRotations } =
+            drag;
           for (let i = 0; i < multiShapeIds!.length; i++) {
-            const s = sceneState.shapes.find((sh) => sh.id === multiShapeIds![i]);
+            const s = sceneState.shapes.find(
+              (sh) => sh.id === multiShapeIds![i],
+            );
             if (!s) continue;
             s.position = [...multiStartPositions![i]] as Vec3;
             s.rotation = [...multiStartRotations![i]] as Vec3;
           }
           sceneState.version++;
-          rotateShapesAroundPivot(multiShapeIds!, drag.pivotPos, drag.axisDir, deltaAngle);
+          rotateShapesAroundPivot(
+            multiShapeIds!,
+            drag.pivotPos,
+            drag.axisDir,
+            deltaAngle,
+          );
         } else {
           // Restore startRotation, then commit via rotateShape (which pushes undo)
           const shape = sceneState.shapes.find((s) => s.id === drag.shapeId);
@@ -797,7 +926,12 @@ export default function GizmoOverlay() {
       }
 
       const currentT = projectRayOnAxisDir(
-        camera, canvas, e.clientX, e.clientY, drag.pivotPos, drag.axisDir,
+        camera,
+        canvas,
+        e.clientX,
+        e.clientY,
+        drag.pivotPos,
+        drag.axisDir,
       );
       const delta = currentT - drag.startT;
 
@@ -810,7 +944,9 @@ export default function GizmoOverlay() {
             // Restore all shapes to start, then commit via batch
             const { multiShapeIds, multiStartPositions } = drag;
             for (let i = 0; i < multiShapeIds!.length; i++) {
-              const s = sceneState.shapes.find((sh) => sh.id === multiShapeIds![i]);
+              const s = sceneState.shapes.find(
+                (sh) => sh.id === multiShapeIds![i],
+              );
               if (!s) continue;
               s.position = [...multiStartPositions![i]] as Vec3;
             }
@@ -848,7 +984,9 @@ export default function GizmoOverlay() {
           // Restore all, then commit via batch
           const { multiShapeIds, multiStartPositions, multiStartScales } = drag;
           for (let i = 0; i < multiShapeIds!.length; i++) {
-            const s = sceneState.shapes.find((sh) => sh.id === multiShapeIds![i]);
+            const s = sceneState.shapes.find(
+              (sh) => sh.id === multiShapeIds![i],
+            );
             if (!s) continue;
             s.position = [...multiStartPositions![i]] as Vec3;
             s.scale = multiStartScales![i];
@@ -918,10 +1056,7 @@ export default function GizmoOverlay() {
 
 // --- Helpers ---
 
-function addHoverBrightness(
-  trigger: SVGElement,
-  targets: SVGElement[],
-) {
+function addHoverBrightness(trigger: SVGElement, targets: SVGElement[]) {
   trigger.addEventListener("pointerenter", () => {
     for (const t of targets) t.style.filter = "brightness(1.6)";
   });

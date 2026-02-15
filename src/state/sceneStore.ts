@@ -307,7 +307,7 @@ export function updateRadius(worldPoint: Vec3) {
 
 export function commitRadius() {
   if (sceneState.drag.phase !== "radius") return;
-  const minRadius = 0.05;
+  const minRadius = 0.02;
   const r = Math.max(sceneState.drag.previewSize[0], minRadius);
   const [sx, , sz] = sceneState.drag.startPoint;
   const floor = sceneState.drag.baseFloorY;
