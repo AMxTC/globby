@@ -9,7 +9,6 @@ import { createOrbitCamera } from "./gpu/orbit";
 import { setupPointer } from "./gpu/pointer";
 import Toolbar from "./components/Toolbar";
 import SidePanel from "./components/SidePanel";
-import SettingsPanel from "./components/SettingsPanel";
 import GizmoOverlay from "./components/GizmoOverlay";
 import { themeState } from "./state/themeStore";
 import { setupHotkeys } from "./lib/hotkeys";
@@ -296,7 +295,6 @@ export default function App() {
       )}
       {snap.marquee && <MarqueeOverlay marquee={snap.marquee} />}
       <Toolbar />
-      <SettingsPanel />
       <SidePanel />
     </div>
   );
