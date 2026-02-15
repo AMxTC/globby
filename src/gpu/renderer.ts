@@ -699,9 +699,13 @@ export class GPURenderer {
       // Fall through to bake with fallback pipeline (no return)
     }
 
-    // Find last shape index per layer (for layer fx boundary markers)
+    // Find first/last shape index per layer (for layer fx boundary markers)
+    const layerFirstShapeIdx = new Map<string, number>();
     const layerLastShapeIdx = new Map<string, number>();
     for (let i = 0; i < shapeCount; i++) {
+      if (!layerFirstShapeIdx.has(sorted[i].layerId)) {
+        layerFirstShapeIdx.set(sorted[i].layerId, i);
+      }
       layerLastShapeIdx.set(sorted[i].layerId, i);
     }
 
@@ -747,11 +751,16 @@ export class GPURenderer {
         f32[off + 9] = s.rotation[1];
         f32[off + 10] = s.rotation[2];
         f32[off + 11] = s.scale;
-        // fx_info: bits 0-7 = shape fx slot, bits 8-15 = layer fx slot (last shape of layer only)
+        // fx_info: bits 0-7 = shape fx slot, bits 8-15 = layer fx slot (last shape only),
+        //          bit 16 = first shape in layer (with fx), bit 17 = layer has fx (defer opacity)
         const sfxSlot = shapeIdToFxSlot.get(s.id) ?? 0;
         const isLastInLayer = layerLastShapeIdx.get(s.layerId) === i;
         const lfxSlot = isLastInLayer ? (layerIdToFxSlot.get(s.layerId) ?? 0) : 0;
-        u32[off + 12] = (sfxSlot & 0xFF) | ((lfxSlot & 0xFF) << 8);
+        const layerHasFx = layerIdToFxSlot.has(s.layerId);
+        const isFirstInLayer = layerFirstShapeIdx.get(s.layerId) === i;
+        const firstInLayerBit = (layerHasFx && isFirstInLayer) ? (1 << 16) : 0;
+        const layerHasFxBit = layerHasFx ? (1 << 17) : 0;
+        u32[off + 12] = (sfxSlot & 0xFF) | ((lfxSlot & 0xFF) << 8) | firstInLayerBit | layerHasFxBit;
         // Pack shape fx params (16-bit each)
         const sfp = s.fxParams ?? [0, 0, 0];
         const sp0 = Math.round(Math.max(0, Math.min(1, sfp[0])) * 65535);
