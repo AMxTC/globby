@@ -62,7 +62,7 @@ export const sceneState = proxy({
     },
   ] as Layer[],
   activeLayerId: "1" as string,
-  activeTool: "select" as "select" | ShapeType,
+  activeTool: "select" as "select" | "pushpull" | ShapeType,
   selectedShapeIds: [] as string[],
   editMode: "object" as "object" | "edit",
   showDebugChunks: false,
@@ -175,7 +175,7 @@ export function addShape(shape: Omit<SDFShape, "id" | "layerId">) {
   sceneState.version++;
 }
 
-export function setTool(tool: "select" | ShapeType) {
+export function setTool(tool: "select" | "pushpull" | ShapeType) {
   sceneState.activeTool = tool;
 }
 

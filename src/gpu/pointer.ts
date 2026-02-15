@@ -5,10 +5,12 @@ import {
   updateHeight, commitHeight,
   startRadiusDrag, updateRadius, commitRadius,
   selectShape, toggleShapeSelection, enterEditMode, exitEditMode,
+  scaleShape,
   type Vec3,
 } from "../state/sceneStore";
 import type { GPURenderer } from "./renderer";
-import { worldAABBToScreenRect } from "../lib/math3d";
+import { worldAABBToScreenRect, eulerToMatrix3, projectRayOnAxisDir } from "../lib/math3d";
+import { computeFaceDrag, detectFace, type FaceDragParams } from "../lib/editFace";
 
 const FLOOR_Y = 0;
 const raycaster = new Raycaster();
@@ -84,6 +86,14 @@ function getHeightFromRay(
   return baseY + Math.max(t, 0);
 }
 
+// --- Push/Pull helpers ---
+
+type PushPullDrag = FaceDragParams & {
+  shapeId: string;
+  startT: number;      // ray parameter at drag start
+  axis?: "x" | "y" | "z";  // needed for computeFaceDrag shape dispatch
+};
+
 const MARQUEE_THRESHOLD = 4; // px distance before drag becomes marquee
 
 function commitSelection(ids: string[], shift: boolean) {
@@ -122,6 +132,7 @@ export function setupPointer(
   let extrudeCornerX = 0;
   let extrudeCornerZ = 0;
   let marqueeStart: { x: number; y: number; pointerId: number; shiftKey: boolean } | null = null;
+  let pushPullDrag: PushPullDrag | null = null;
 
   function onPointerDown(e: PointerEvent) {
     const tool = sceneState.activeTool;
@@ -137,6 +148,111 @@ export function setupPointer(
 
       marqueeStart = { x: e.clientX, y: e.clientY, pointerId: e.pointerId, shiftKey: e.shiftKey };
       canvas.setPointerCapture(e.pointerId);
+      return;
+    }
+
+    // --- Push/Pull tool handling ---
+    if (tool === "pushpull") {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      canvas.setPointerCapture(e.pointerId);
+
+      const dpr = window.devicePixelRatio;
+      const rect = canvas.getBoundingClientRect();
+      const pixelX = (e.clientX - rect.left) * dpr;
+      const pixelY = (e.clientY - rect.top) * dpr;
+      const clientX = e.clientX;
+      const clientY = e.clientY;
+
+      const renderer = getRenderer();
+      if (!renderer) {
+        canvas.releasePointerCapture(e.pointerId);
+        return;
+      }
+
+      renderer.pickWorldPos(pixelX, pixelY).then((result) => {
+        // Stale check: tool changed or drag already started while awaiting pick
+        if (sceneState.activeTool !== "pushpull" || pushPullDrag) {
+          canvas.releasePointerCapture(e.pointerId);
+          return;
+        }
+
+        if (!result || !result.shapeId) {
+          canvas.releasePointerCapture(e.pointerId);
+          return;
+        }
+
+        const shape = sceneState.shapes.find((s) => s.id === result.shapeId);
+        if (!shape) {
+          canvas.releasePointerCapture(e.pointerId);
+          return;
+        }
+
+        const face = detectFace(result.worldPos as Vec3, shape);
+        if (!face) {
+          canvas.releasePointerCapture(e.pointerId);
+          return;
+        }
+
+        // Compute world-space axis direction (shape-aware)
+        let axisDir: Vec3;
+        if (shape.type === "sphere") {
+          // Radial: center → click point
+          const dx = result.worldPos[0] - shape.position[0];
+          const dy = result.worldPos[1] - shape.position[1];
+          const dz = result.worldPos[2] - shape.position[2];
+          const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+          axisDir = len > 1e-6 ? [dx / len, dy / len, dz / len] : [1, 0, 0];
+        } else if (
+          (shape.type === "cylinder" || shape.type === "cone" || shape.type === "pyramid") &&
+          face.axis !== "y"
+        ) {
+          // Side face: radial direction in the shape's local XZ plane
+          const m = eulerToMatrix3(shape.rotation[0], shape.rotation[1], shape.rotation[2]);
+          const dx = result.worldPos[0] - shape.position[0];
+          const dy = result.worldPos[1] - shape.position[1];
+          const dz = result.worldPos[2] - shape.position[2];
+          // Project onto local X and Z (transpose = inverse for orthonormal)
+          const lx = m[0] * dx + m[1] * dy + m[2] * dz;
+          const lz = m[6] * dx + m[7] * dy + m[8] * dz;
+          const rLen = Math.sqrt(lx * lx + lz * lz);
+          const nx = rLen > 1e-6 ? lx / rLen : 1;
+          const nz = rLen > 1e-6 ? lz / rLen : 0;
+          // World direction = nx * localXAxis + nz * localZAxis
+          axisDir = [
+            m[0] * nx + m[6] * nz,
+            m[1] * nx + m[7] * nz,
+            m[2] * nx + m[8] * nz,
+          ];
+        } else {
+          // Box faces & cap faces: use the local axis from rotation matrix
+          const m = eulerToMatrix3(shape.rotation[0], shape.rotation[1], shape.rotation[2]);
+          axisDir = [
+            m[face.axisIdx * 3 + 0],
+            m[face.axisIdx * 3 + 1],
+            m[face.axisIdx * 3 + 2],
+          ];
+        }
+
+        // Project ray onto that axis to get startT
+        const startT = projectRayOnAxisDir(
+          camera, canvas, clientX, clientY,
+          shape.position, axisDir,
+        );
+
+        pushPullDrag = {
+          shapeId: shape.id,
+          axisIdx: face.axisIdx,
+          negative: face.negative,
+          axisDir,
+          startT,
+          startPos: [...shape.position] as Vec3,
+          startSize: [...shape.size] as Vec3,
+          startScale: shape.scale,
+          axis: face.axis,
+        };
+      });
       return;
     }
 
@@ -209,6 +325,25 @@ export function setupPointer(
   }
 
   function onPointerMove(e: PointerEvent) {
+    // --- Push/Pull drag ---
+    if (pushPullDrag) {
+      e.stopImmediatePropagation();
+      const currentT = projectRayOnAxisDir(
+        camera, canvas, e.clientX, e.clientY,
+        pushPullDrag.startPos, pushPullDrag.axisDir,
+      );
+      const delta = currentT - pushPullDrag.startT;
+
+      const shape = sceneState.shapes.find((s) => s.id === pushPullDrag!.shapeId);
+      if (!shape) return;
+
+      const { newSize, newPos } = computeFaceDrag(pushPullDrag, delta, shape.type, pushPullDrag.axis);
+      shape.size = newSize;
+      shape.position = newPos;
+      sceneState.version++;
+      return;
+    }
+
     // --- Marquee drag ---
     if (marqueeStart) {
       const dx = e.clientX - marqueeStart.x;
@@ -331,6 +466,34 @@ export function setupPointer(
   }
 
   function onPointerUp(e: PointerEvent) {
+    // --- Push/Pull commit ---
+    if (pushPullDrag) {
+      canvas.releasePointerCapture(e.pointerId);
+
+      const shape = sceneState.shapes.find((s) => s.id === pushPullDrag!.shapeId);
+      if (shape) {
+        const currentT = projectRayOnAxisDir(
+          camera, canvas, e.clientX, e.clientY,
+          pushPullDrag.startPos, pushPullDrag.axisDir,
+        );
+        const delta = currentT - pushPullDrag.startT;
+
+        // Restore shape to start state
+        shape.position = [...pushPullDrag.startPos] as Vec3;
+        shape.size = [...pushPullDrag.startSize] as Vec3;
+        sceneState.version++;
+
+        // Compute final new size and position
+        const { newSize, newPos } = computeFaceDrag(pushPullDrag, delta, shape.type, pushPullDrag.axis);
+
+        // Commit via scaleShape (pushes undo)
+        scaleShape(pushPullDrag.shapeId, newSize, newPos);
+      }
+
+      pushPullDrag = null;
+      return;
+    }
+
     // --- Marquee / click select ---
     if (marqueeStart) {
       const marqueeRect = sceneState.marquee

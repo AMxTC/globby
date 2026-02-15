@@ -23,6 +23,7 @@ import {
   rotateVecAroundAxis,
   composeWorldRotation,
 } from "../lib/math3d";
+import { computeFaceDrag } from "../lib/editFace";
 
 const AXIS_COLORS = { x: "#ef4444", y: "#22c55e", z: "#3b82f6" } as const;
 const AXES: Array<"x" | "y" | "z"> = ["x", "y", "z"];
@@ -30,7 +31,6 @@ const ARROW_TARGET_PX = 80; // desired screen size at typical viewing angle
 const ARROW_HEAD_PX = 10;
 const SCALE_HANDLE_SIZE = 8;
 const CP_RADIUS = 5;
-const MIN_SIZE = 0.02;
 const ARC_SAMPLES = 16;
 const ARC_RADIUS_FRACTION = 0.85;
 const ROTATION_SNAP = Math.PI / 2; // 90 degrees
@@ -835,7 +835,12 @@ export default function GizmoOverlay() {
       } else if (drag.kind === "editFace") {
         const shape = sceneState.shapes.find((s) => s.id === drag.shapeId);
         if (!shape) return;
-        applyEditFace(drag, delta, shape);
+        const { newSize, newPos } = computeFaceDrag(
+          { ...drag, negative: drag.negative ?? false }, delta, shape.type, drag.axis,
+        );
+        shape.position = newPos;
+        shape.size = newSize;
+        sceneState.version++;
       }
     }
 
@@ -1011,14 +1016,12 @@ export default function GizmoOverlay() {
       } else if (drag.kind === "editFace") {
         const shape = sceneState.shapes.find((s) => s.id === drag.shapeId);
         if (shape) {
-          const origPos: Vec3 = [...drag.startPos];
-          const origSize: Vec3 = [...drag.startSize];
-          shape.position = origPos;
-          shape.size = origSize;
+          shape.position = [...drag.startPos] as Vec3;
+          shape.size = [...drag.startSize] as Vec3;
           sceneState.version++;
-          const newPos: Vec3 = [...drag.startPos];
-          const newSize: Vec3 = [...drag.startSize];
-          computeEditFace(drag, delta, newPos, newSize, shape);
+          const { newSize, newPos } = computeFaceDrag(
+            { ...drag, negative: drag.negative ?? false }, delta, shape.type, drag.axis,
+          );
           scaleShape(drag.shapeId, newSize, newPos);
         }
       }
@@ -1214,61 +1217,3 @@ function applyScale(drag: DragInfo, delta: number, shape: SDFShape) {
   sceneState.version++;
 }
 
-function computeEditFace(
-  drag: DragInfo,
-  delta: number,
-  newPos: Vec3,
-  newSize: Vec3,
-  shape: SDFShape,
-) {
-  const { axisIdx, negative } = drag;
-
-  if (shape.type === "sphere") {
-    // Uniform resize
-    const newR = Math.max(drag.startSize[0] + delta, MIN_SIZE);
-    newSize[0] = newR;
-    newSize[1] = newR;
-    newSize[2] = newR;
-    return;
-  }
-
-  if (
-    (shape.type === "cylinder" ||
-      shape.type === "cone" ||
-      shape.type === "pyramid") &&
-    drag.axis !== "y"
-  ) {
-    // Radius handles: uniform XZ resize
-    const newR = Math.max(drag.startSize[axisIdx] + delta, MIN_SIZE);
-    newSize[0] = newR;
-    newSize[2] = newR;
-    return;
-  }
-
-  // Default: move one face, keep opposite fixed (same as box face drag)
-  // Position shift is along the local axis direction
-  if (negative) {
-    const newHalf = Math.max(drag.startSize[axisIdx] - delta, MIN_SIZE);
-    const shift = (drag.startSize[axisIdx] - newHalf) / 2;
-    newSize[axisIdx] = newHalf;
-    newPos[0] = drag.startPos[0] + drag.axisDir[0] * shift * drag.startScale;
-    newPos[1] = drag.startPos[1] + drag.axisDir[1] * shift * drag.startScale;
-    newPos[2] = drag.startPos[2] + drag.axisDir[2] * shift * drag.startScale;
-  } else {
-    const newHalf = Math.max(drag.startSize[axisIdx] + delta, MIN_SIZE);
-    const shift = (newHalf - drag.startSize[axisIdx]) / 2;
-    newSize[axisIdx] = newHalf;
-    newPos[0] = drag.startPos[0] + drag.axisDir[0] * shift * drag.startScale;
-    newPos[1] = drag.startPos[1] + drag.axisDir[1] * shift * drag.startScale;
-    newPos[2] = drag.startPos[2] + drag.axisDir[2] * shift * drag.startScale;
-  }
-}
-
-function applyEditFace(drag: DragInfo, delta: number, shape: SDFShape) {
-  const newPos: Vec3 = [...drag.startPos];
-  const newSize: Vec3 = [...drag.startSize];
-  computeEditFace(drag, delta, newPos, newSize, shape);
-  shape.position = newPos;
-  shape.size = newSize;
-  sceneState.version++;
-}
