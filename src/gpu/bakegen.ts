@@ -28,12 +28,7 @@ function generateShapeEval(shapeVar: string): string {
     d_shape = d_shape * s;`;
 }
 
-function generateTransferBlock(shapeVar: string, hasLayerFx: boolean): string {
-  // When layer fx is active, opacity is deferred to after the layer fx.
-  // Shapes combine at full strength within the layer; opacity is applied at the boundary.
-  const opacityExpr = hasLayerFx
-    ? `select(opacity, 1.0, (shapes[${shapeVar}].fx_info & 0x20000u) != 0u)`
-    : 'opacity';
+function generateTransferBlock(shapeVar: string): string {
   return `
     // Track closest shape by raw SDF distance (for selection)
     if (abs(d_shape) < closest_raw) {
@@ -45,7 +40,7 @@ function generateTransferBlock(shapeVar: string, hasLayerFx: boolean): string {
     let packed = shapes[${shapeVar}].transfer_packed;
     let mode = packed & 0xFFu;
     let opacity = f32((packed >> 8u) & 0xFFFu) / 4095.0;
-    let eff_opacity = ${opacityExpr};
+    let eff_opacity = opacity;
     let param = f32((packed >> 20u) & 0xFFFu) / 4095.0;
 
     // d_scaled lerps shape toward no-effect at low opacity
@@ -139,17 +134,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   var closest_raw: f32 = 1e10;
   var closest_id: u32 = 0xFFFFFFFFu;`);
 
-  // d_layer_start: snapshot of d before the current layer began (for deferred opacity)
-  if (hasLayerFx) {
-    mainLines.push(`  var d_layer_start: f32 = 1e10;`);
-  }
-
   mainLines.push(`  for (var i: u32 = 0u; i < params.shape_count; i = i + 1u) {`);
-
-  // Save d at layer boundary (bit 16 = first shape in layer with fx)
-  if (hasLayerFx) {
-    mainLines.push(`    if ((shapes[i].fx_info & 0x10000u) != 0u) { d_layer_start = d; }`);
-  }
 
   mainLines.push(generateShapeEval('i'));
 
@@ -164,23 +149,21 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     mainLines.push(`    }`);
   }
 
-  mainLines.push(generateTransferBlock('i', hasLayerFx));
-
-  // Layer fx dispatch via slot from fx_info bits 8-15 (non-zero on last shape of layer)
+  // Layer fx dispatch: apply to individual shapes (bits 8-15 contain layer fx slot for all shapes in layer)
   if (hasLayerFx) {
     mainLines.push(`    let lfx = (shapes[i].fx_info >> 8u) & 0xFFu;`);
     mainLines.push(`    if (lfx != 0u) {`);
     mainLines.push(`      switch lfx {`);
     for (const { slot } of layerFxSlots) {
-      mainLines.push(`        case ${slot}u: { d = layer_fx_${slot}(d, world_pos, unpackLayerFxParams(shapes[i])); }`);
+      mainLines.push(`        case ${slot}u: { d_shape = layer_fx_${slot}(d_shape, world_pos, unpackLayerFxParams(shapes[i])); }`);
     }
     mainLines.push(`        default: {}`);
     mainLines.push(`      }`);
-    // Apply deferred opacity: blend layer result with d_layer_start
-    mainLines.push(`      let layer_opacity = f32((shapes[i].transfer_packed >> 8u) & 0xFFFu) / 4095.0;`);
-    mainLines.push(`      d = mix(d_layer_start, d, layer_opacity);`);
     mainLines.push(`    }`);
   }
+
+  // Transfer: shapes combine with d using their transfer mode
+  mainLines.push(generateTransferBlock('i'));
 
   mainLines.push(`  }
 

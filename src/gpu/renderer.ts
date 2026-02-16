@@ -751,23 +751,17 @@ export class GPURenderer {
         f32[off + 9] = s.rotation[1];
         f32[off + 10] = s.rotation[2];
         f32[off + 11] = s.scale;
-        // fx_info: bits 0-7 = shape fx slot, bits 8-15 = layer fx slot (last shape only),
-        //          bit 16 = first shape in layer (with fx), bit 17 = layer has fx (defer opacity)
+        // fx_info: bits 0-7 = shape fx slot, bits 8-15 = layer fx slot (applied to all shapes in layer)
         const sfxSlot = shapeIdToFxSlot.get(s.id) ?? 0;
-        const isLastInLayer = layerLastShapeIdx.get(s.layerId) === i;
-        const lfxSlot = isLastInLayer ? (layerIdToFxSlot.get(s.layerId) ?? 0) : 0;
-        const layerHasFx = layerIdToFxSlot.has(s.layerId);
-        const isFirstInLayer = layerFirstShapeIdx.get(s.layerId) === i;
-        const firstInLayerBit = (layerHasFx && isFirstInLayer) ? (1 << 16) : 0;
-        const layerHasFxBit = layerHasFx ? (1 << 17) : 0;
-        u32[off + 12] = (sfxSlot & 0xFF) | ((lfxSlot & 0xFF) << 8) | firstInLayerBit | layerHasFxBit;
+        const lfxSlot = layerIdToFxSlot.get(s.layerId) ?? 0;
+        u32[off + 12] = (sfxSlot & 0xFF) | ((lfxSlot & 0xFF) << 8);
         // Pack shape fx params (16-bit each)
         const sfp = s.fxParams ?? [0, 0, 0];
         const sp0 = Math.round(Math.max(0, Math.min(1, sfp[0])) * 65535);
         const sp1 = Math.round(Math.max(0, Math.min(1, sfp[1])) * 65535);
         const sp2 = Math.round(Math.max(0, Math.min(1, sfp[2])) * 65535);
-        // Pack layer fx params (on last shape of layer)
-        const lfp = isLastInLayer ? (info?.fxParams ?? [0, 0, 0]) : [0, 0, 0];
+        // Pack layer fx params (on all shapes in layer)
+        const lfp = info?.fxParams ?? [0, 0, 0];
         const lp0 = Math.round(Math.max(0, Math.min(1, lfp[0])) * 65535);
         const lp1 = Math.round(Math.max(0, Math.min(1, lfp[1])) * 65535);
         const lp2 = Math.round(Math.max(0, Math.min(1, lfp[2])) * 65535);
