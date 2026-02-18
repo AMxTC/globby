@@ -7,6 +7,8 @@ export interface FaderProps {
   max?: number;
   step?: number;
   onChange: (value: number) => void;
+  onStart?: () => void;
+  onCommit?: () => void;
   /** "percent" shows 0–100%, "number" shows the raw value */
   display?: "percent" | "number";
   /** Decimal places for "number" display */
@@ -20,6 +22,8 @@ export function Fader({
   max = 1,
   step = 0.01,
   onChange,
+  onStart,
+  onCommit,
   display = "percent",
   precision = 2,
   className,
@@ -57,9 +61,10 @@ export function Fader({
       e.preventDefault();
       dragging.current = true;
       (e.target as HTMLElement).setPointerCapture(e.pointerId);
+      onStart?.();
       onChange(valueFromMouse(e.clientX));
     },
-    [editing, onChange, valueFromMouse],
+    [editing, onChange, valueFromMouse, onStart],
   );
 
   const onPointerMove = useCallback(
@@ -71,8 +76,10 @@ export function Fader({
   );
 
   const onPointerUp = useCallback(() => {
+    if (!dragging.current) return;
     dragging.current = false;
-  }, []);
+    onCommit?.();
+  }, [onCommit]);
 
   // --- inline editing ---
   function startEditing() {
@@ -87,11 +94,13 @@ export function Fader({
   function commitEditing() {
     const parsed = parseFloat(editText);
     if (!isNaN(parsed)) {
+      onStart?.();
       if (display === "percent") {
         onChange(clamp(parsed / 100));
       } else {
         onChange(clamp(parsed));
       }
+      onCommit?.();
     }
     setEditing(false);
   }

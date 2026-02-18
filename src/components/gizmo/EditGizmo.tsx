@@ -3,6 +3,7 @@ import type { Matrix4 } from "three";
 import {
   sceneState,
   sceneRefs,
+  pushUndo,
   scaleShape,
   type Vec3,
   type SDFShape,
@@ -321,6 +322,7 @@ export default function EditGizmo() {
         const { newSize, newPos } = computeFaceDrag(
           { ...drag, negative: drag.negative }, delta, shape.type, drag.axis,
         );
+        pushUndo();
         scaleShape(drag.shapeId, newSize, newPos);
       }
 

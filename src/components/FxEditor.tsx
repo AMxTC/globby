@@ -120,11 +120,12 @@ interface FxEditorProps {
   onChange: (code: string) => void;
   fxParams: Vec3;
   onFxParamsChange: (params: Vec3) => void;
+  onStart?: () => void;
   error: string | null;
   readOnly?: boolean;
 }
 
-export function FxEditor({ code, onChange, fxParams, onFxParamsChange, error, readOnly }: FxEditorProps) {
+export function FxEditor({ code, onChange, fxParams, onFxParamsChange, onStart, error, readOnly }: FxEditorProps) {
   const { theme } = useSnapshot(themeState);
   const [localCode, setLocalCode] = useState(code);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -233,6 +234,7 @@ export function FxEditor({ code, onChange, fxParams, onFxParamsChange, error, re
                 min={param.min}
                 max={param.max}
                 step={param.step}
+                onStart={onStart}
                 onChange={(v) => handleParamChange(idx, v)}
                 display={param.display}
                 precision={param.precision}

@@ -4,6 +4,10 @@ import { cn } from "@/lib/utils";
 export interface NumberInputProps {
   value: number;
   onChange: (value: number) => void;
+  /** Called once at the start of a drag or before an edit commit */
+  onStart?: () => void;
+  /** Called once at the end of a drag or after an edit commit */
+  onCommit?: () => void;
   step?: number;
   precision?: number;
   min?: number;
@@ -14,6 +18,8 @@ export interface NumberInputProps {
 export function NumberInput({
   value,
   onChange,
+  onStart,
+  onCommit,
   step = 0.01,
   precision = 2,
   min,
@@ -49,8 +55,9 @@ export function NumberInput({
       dragStartValue.current = value;
       totalMovement.current = 0;
       (e.target as HTMLElement).setPointerCapture(e.pointerId);
+      onStart?.();
     },
-    [editing, value],
+    [editing, value, onStart],
   );
 
   const onPointerMove = useCallback(
@@ -73,8 +80,10 @@ export function NumberInput({
       // Click-to-type: open edit mode
       setEditText(value.toFixed(precision));
       setEditing(true);
+    } else {
+      onCommit?.();
     }
-  }, [value, precision]);
+  }, [value, precision, onCommit]);
 
   // --- click-to-type ---
   useEffect(() => {
@@ -90,7 +99,9 @@ export function NumberInput({
   function commitEditing() {
     const parsed = parseFloat(editText);
     if (!isNaN(parsed)) {
+      onStart?.();
       onChange(clamp(parsed));
+      onCommit?.();
     }
     setEditing(false);
   }

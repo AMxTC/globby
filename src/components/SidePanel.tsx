@@ -25,6 +25,7 @@ import { Toggle } from "./ui/toggle";
 import ThemeToggle from "./ThemeToggle";
 import {
   sceneState,
+  pushUndo,
   addLayer,
   removeLayer,
   renameLayer,
@@ -124,6 +125,7 @@ function FxSection({
   onChange,
   fxParams,
   onFxParamsChange,
+  onStart,
   error,
   compiling,
 }: {
@@ -135,6 +137,7 @@ function FxSection({
   onChange: (code: string) => void;
   fxParams: Vec3;
   onFxParamsChange: (params: Vec3) => void;
+  onStart?: () => void;
   error: string | null;
   compiling?: boolean;
 }) {
@@ -176,6 +179,7 @@ function FxSection({
             onChange={onChange}
             fxParams={fxParams}
             onFxParamsChange={onFxParamsChange}
+            onStart={onStart}
             error={error}
             readOnly={!enabled}
           />
@@ -500,6 +504,7 @@ export default function SidePanel() {
                 </label>
                 <Fader
                   value={activeLayer.opacity}
+                  onStart={pushUndo}
                   onChange={(v) => setLayerOpacity(activeLayer.id, v)}
                   display="percent"
                   className="flex-1"
@@ -536,6 +541,7 @@ export default function SidePanel() {
                   </label>
                   <Fader
                     value={activeLayer.transferParam}
+                    onStart={pushUndo}
                     onChange={(v) => setLayerTransferParam(activeLayer.id, v)}
                     display="percent"
                     className="flex-1"
@@ -556,6 +562,7 @@ export default function SidePanel() {
                 onChange={(c) => setLayerFx(activeLayer.id, c)}
                 fxParams={(activeLayer.fxParams ?? [0, 0, 0]) as Vec3}
                 onFxParamsChange={(p) => setLayerFxParams(activeLayer.id, p)}
+                onStart={pushUndo}
                 error={snap.fxError}
                 compiling={snap.fxCompiling}
               />
@@ -965,6 +972,7 @@ function PropertiesContent({
             </label>
             <NumberInput
               value={p.get(size)}
+              onStart={pushUndo}
               onChange={(v) => {
                 const newSize = p.set(size, v);
                 scaleShape(shapeId, newSize as Vec3);
@@ -999,6 +1007,7 @@ function PropertiesContent({
               </label>
               <NumberInput
                 value={wallThickness ?? 0.03}
+                onStart={pushUndo}
                 onChange={(v) => setShapeWallThickness(shapeId, v)}
                 step={0.01}
                 precision={2}
@@ -1025,6 +1034,7 @@ function PropertiesContent({
               </label>
               <NumberInput
                 value={position[i]}
+                onStart={pushUndo}
                 onChange={(v) => {
                   const newPos = [...position] as Vec3;
                   newPos[i] = v;
@@ -1054,6 +1064,7 @@ function PropertiesContent({
               </label>
               <NumberInput
                 value={rotation[i] / DEG}
+                onStart={pushUndo}
                 onChange={(v) => {
                   const newRot = [...rotation] as Vec3;
                   newRot[i] = v * DEG;
@@ -1078,6 +1089,7 @@ function PropertiesContent({
           </label>
           <NumberInput
             value={scale}
+            onStart={pushUndo}
             onChange={(v) => {
               scaleShape(shapeId, size, undefined, v);
             }}
@@ -1099,6 +1111,7 @@ function PropertiesContent({
         onChange={(c) => setShapeFx(shapeId, c)}
         fxParams={fxParams}
         onFxParamsChange={(p) => setShapeFxParams(shapeId, p)}
+        onStart={pushUndo}
         error={fxError}
       />
     </div>

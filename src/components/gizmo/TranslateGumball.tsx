@@ -3,6 +3,7 @@ import type { Matrix4 } from "three";
 import {
   sceneState,
   sceneRefs,
+  pushUndo,
   moveShape,
   scaleShape,
   rotateShape,
@@ -735,6 +736,7 @@ export default function TranslateGumball() {
             shape.rotation = [...drag.startRotation] as Vec3;
             sceneState.version++;
           }
+          pushUndo();
           rotateShape(drag.shapeId, composeWorldRotation(drag.startRotation, drag.axisDir, deltaAngle));
         }
         dragRef.current = null;
@@ -783,6 +785,7 @@ export default function TranslateGumball() {
               shape.position = [...drag.startPos] as Vec3;
               sceneState.version++;
             }
+            pushUndo();
             moveShape(drag.shapeId, newPos);
           }
         }
@@ -809,6 +812,7 @@ export default function TranslateGumball() {
             shape.scale = drag.startScale;
             sceneState.version++;
             const newScale = computeUniformScale(drag, delta);
+            pushUndo();
             scaleShape(drag.shapeId, origSize, origPos, newScale);
           }
         }

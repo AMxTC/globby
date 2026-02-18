@@ -2,7 +2,7 @@ import { Raycaster, Vector2, Vector3, Plane, Matrix4, type PerspectiveCamera } f
 
 const _vpMat = new Matrix4();
 import {
-  sceneState, sceneRefs, isShapeTool, isDrawTool,
+  sceneState, sceneRefs, isShapeTool, isDrawTool, pushUndo,
   startDrag, updateBase, lockBase,
   updateHeight, commitHeight,
   startRadiusDrag, updateRadius, commitRadius,
@@ -744,7 +744,7 @@ export function setupPointer(
         // Compute final new size and position
         const { newSize, newPos } = computeFaceDrag(pushPullDrag, delta, shape.type, pushPullDrag.axis);
 
-        // Commit via scaleShape (pushes undo)
+        pushUndo();
         scaleShape(pushPullDrag.shapeId, newSize, newPos);
       }
 

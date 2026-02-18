@@ -145,7 +145,7 @@ function snapshot(): SceneSnapshot {
   };
 }
 
-function pushUndo() {
+export function pushUndo() {
   undoStack.push(snapshot());
   if (undoStack.length > MAX_UNDO) undoStack.shift();
   redoStack.length = 0;
@@ -624,7 +624,6 @@ export function duplicateSelectedShapes(): string[] {
 export function moveShape(id: string, newPosition: Vec3) {
   const shape = sceneState.shapes.find((s) => s.id === id);
   if (!shape) return;
-  pushUndo();
   shape.position = newPosition;
   sceneState.version++;
 }
@@ -632,7 +631,6 @@ export function moveShape(id: string, newPosition: Vec3) {
 export function rotateShape(id: string, newRotation: Vec3) {
   const shape = sceneState.shapes.find((s) => s.id === id);
   if (!shape) return;
-  pushUndo();
   shape.rotation = newRotation;
   sceneState.version++;
 }
@@ -645,7 +643,6 @@ export function scaleShape(
 ) {
   const shape = sceneState.shapes.find((s) => s.id === id);
   if (!shape) return;
-  pushUndo();
   shape.size = newSize;
   if (newPosition) shape.position = newPosition;
   if (newScale !== undefined) shape.scale = newScale;
