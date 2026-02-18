@@ -1063,7 +1063,7 @@ export class GPURenderer {
           lineUniforms[18] = lineGroup.color[2];
           lineUniforms[19] = lineGroup.color[3];
           this.device.queue.writeBuffer(this.linesUniformBuffer, uniformSlot * 256, lineUniforms);
-          this.device.queue.writeBuffer(this.linesVertexBuffer, vertexOffset, lineGroup.verts);
+          this.device.queue.writeBuffer(this.linesVertexBuffer, vertexOffset, lineGroup.verts as Float32Array<ArrayBuffer>);
 
           linesPass.setBindGroup(0, bindGroup, [uniformSlot * 256]);
           linesPass.setVertexBuffer(0, this.linesVertexBuffer, vertexOffset);
