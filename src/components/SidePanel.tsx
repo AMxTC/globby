@@ -43,7 +43,6 @@ import {
   setLayerFx,
   setShapeFxParams,
   setLayerFxParams,
-  recenterPolygon,
   setShapeCapped,
   setShapeWallThickness,
 } from "../state/sceneStore";

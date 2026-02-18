@@ -2,18 +2,18 @@ import { Raycaster, Vector2, Vector3, Plane, Matrix4, type PerspectiveCamera } f
 
 const _vpMat = new Matrix4();
 import {
-  sceneState, sceneRefs, isShapeTool, isDrawTool, pushUndo,
+  sceneState, sceneRefs, isShapeTool, pushUndo,
   startDrag, updateBase, lockBase,
   updateHeight, commitHeight,
   startRadiusDrag, updateRadius, commitRadius,
   selectShape, toggleShapeSelection, enterEditMode, exitEditMode,
   scaleShape, editPolyVertices,
-  addPenVertex, cancelPen, closePen,
+  addPenVertex, closePen,
   type Vec3,
 } from "../state/sceneStore";
 import type { GPURenderer } from "./renderer";
 import { worldAABBToScreenRect, eulerToMatrix3, projectRayOnAxisDir, worldToScreen } from "../lib/math3d";
-import { computeFaceDrag, detectFace, type FaceDragParams, type FaceResult } from "../lib/editFace";
+import { computeFaceDrag, detectFace, type FaceDragParams } from "../lib/editFace";
 
 /** Intersect two 2D lines (p0+t*d0) and (p1+s*d1). Returns the intersection point,
  *  or null if lines are parallel. */

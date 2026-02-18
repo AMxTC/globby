@@ -192,7 +192,6 @@ export default function App() {
         if (penVerts.length >= 2) {
           const floorY = sceneState.penFloorY + 0.001; // slight offset to avoid z-fighting
           // Build line segments between consecutive vertices
-          const lineCount = penVerts.length; // N edges for N vertices (last connects back implicitly if in height phase)
           const isHeightPhase = sceneState.drag.phase === "height";
           const segCount = isHeightPhase ? penVerts.length : penVerts.length - 1;
           const verts = new Float32Array(segCount * 2 * 3);

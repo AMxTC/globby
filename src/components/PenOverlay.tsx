@@ -501,7 +501,7 @@ export default function PenOverlay() {
         snapEdgeIdx = -1;
       } else {
         // Convert mouse from client to SVG viewport coords
-        const rect = svg.getBoundingClientRect();
+        const rect = svg!.getBoundingClientRect();
         const mx = mouseX - rect.left;
         const my = mouseY - rect.top;
 
