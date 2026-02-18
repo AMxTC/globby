@@ -1,16 +1,66 @@
 import { Raycaster, Vector2, Vector3, Plane, Matrix4, type PerspectiveCamera } from "three";
+
+const _vpMat = new Matrix4();
 import {
-  sceneState, isShapeTool,
+  sceneState, sceneRefs, isShapeTool, isDrawTool,
   startDrag, updateBase, lockBase,
   updateHeight, commitHeight,
   startRadiusDrag, updateRadius, commitRadius,
   selectShape, toggleShapeSelection, enterEditMode, exitEditMode,
-  scaleShape,
+  scaleShape, editPolyVertices,
+  addPenVertex, cancelPen, closePen,
   type Vec3,
 } from "../state/sceneStore";
 import type { GPURenderer } from "./renderer";
-import { worldAABBToScreenRect, eulerToMatrix3, projectRayOnAxisDir } from "../lib/math3d";
-import { computeFaceDrag, detectFace, type FaceDragParams } from "../lib/editFace";
+import { worldAABBToScreenRect, eulerToMatrix3, projectRayOnAxisDir, worldToScreen } from "../lib/math3d";
+import { computeFaceDrag, detectFace, type FaceDragParams, type FaceResult } from "../lib/editFace";
+
+/** Intersect two 2D lines (p0+t*d0) and (p1+s*d1). Returns the intersection point,
+ *  or null if lines are parallel. */
+function lineLineIntersect2D(
+  p0: [number, number], d0: [number, number],
+  p1: [number, number], d1: [number, number],
+): [number, number] | null {
+  const det = d0[0] * d1[1] - d0[1] * d1[0];
+  if (Math.abs(det) < 1e-10) return null; // parallel
+  const dx = p1[0] - p0[0];
+  const dz = p1[1] - p0[1];
+  const t = (dx * d1[1] - dz * d1[0]) / det;
+  return [p0[0] + t * d0[0], p0[1] + t * d0[1]];
+}
+
+/** Move edge ei along normal by localDelta, then project adjacent vertices
+ *  along their original edge directions to preserve edge orientations. */
+function pushPullPolyEdge(
+  startVerts: [number, number][],
+  ei: number,
+  nx: number, nz: number,
+  localDelta: number,
+): [number, number][] {
+  const count = startVerts.length;
+  const j = (ei + 1) % count;
+  const newVerts = startVerts.map(v => [...v] as [number, number]);
+
+  // Pushed edge: offset both endpoints along normal
+  const pushedA: [number, number] = [startVerts[ei][0] + nx * localDelta, startVerts[ei][1] + nz * localDelta];
+  const pushedB: [number, number] = [startVerts[j][0] + nx * localDelta, startVerts[j][1] + nz * localDelta];
+  // Direction of the pushed edge (same as original edge direction)
+  const edgeDir: [number, number] = [startVerts[j][0] - startVerts[ei][0], startVerts[j][1] - startVerts[ei][1]];
+
+  // Previous edge: prev -> ei. Its direction stays fixed.
+  const prev = (ei - 1 + count) % count;
+  const prevDir: [number, number] = [startVerts[ei][0] - startVerts[prev][0], startVerts[ei][1] - startVerts[prev][1]];
+  const intA = lineLineIntersect2D(startVerts[prev], prevDir, pushedA, edgeDir);
+  newVerts[ei] = intA ?? pushedA;
+
+  // Next edge: j -> next. Its direction stays fixed.
+  const next = (j + 1) % count;
+  const nextDir: [number, number] = [startVerts[next][0] - startVerts[j][0], startVerts[next][1] - startVerts[j][1]];
+  const intB = lineLineIntersect2D(startVerts[next], nextDir, pushedA, edgeDir);
+  newVerts[j] = intB ?? pushedB;
+
+  return newVerts;
+}
 
 const FLOOR_Y = 0;
 const raycaster = new Raycaster();
@@ -92,6 +142,10 @@ type PushPullDrag = FaceDragParams & {
   shapeId: string;
   startT: number;      // ray parameter at drag start
   axis?: "x" | "y" | "z";  // needed for computeFaceDrag shape dispatch
+  edgeIdx?: number;                    // polygon edge index
+  edgeNormal2D?: [number, number];     // local 2D outward normal of the edge
+  startVertices?: [number, number][];  // snapshot of vertices at drag start
+  startBoundingRadius?: number;        // snapshot of size[0] at drag start
 };
 
 const MARQUEE_THRESHOLD = 4; // px distance before drag becomes marquee
@@ -133,6 +187,25 @@ export function setupPointer(
   let extrudeCornerZ = 0;
   let marqueeStart: { x: number; y: number; pointerId: number; shiftKey: boolean } | null = null;
   let pushPullDrag: PushPullDrag | null = null;
+  const PEN_CLOSE_PX = 20; // screen-pixel distance to first vertex to close
+
+  function isNearFirstVertex(clickX: number, clickY: number): boolean {
+    const verts = sceneState.penVertices;
+    if (verts.length < 3) return false;
+    camera.updateMatrixWorld();
+    _vpMat.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    const cw = canvas.clientWidth;
+    const ch = canvas.clientHeight;
+    const floorY = sceneState.penFloorY;
+    const [sx, sy, vis] = worldToScreen([verts[0][0], floorY, verts[0][1]], _vpMat, cw, ch);
+    if (!vis) return false;
+    const rect = canvas.getBoundingClientRect();
+    const px = clickX - rect.left;
+    const py = clickY - rect.top;
+    const dx = px - sx;
+    const dy = py - sy;
+    return Math.sqrt(dx * dx + dy * dy) < PEN_CLOSE_PX;
+  }
 
   function onPointerDown(e: PointerEvent) {
     const tool = sceneState.activeTool;
@@ -195,6 +268,56 @@ export function setupPointer(
           return;
         }
 
+        // Polygon edge push/pull: compute edge normal as axis
+        if (face.edgeIdx !== undefined && shape.type === "polygon" && shape.vertices) {
+          const verts = shape.vertices;
+          const count = verts.length;
+          const ei = face.edgeIdx;
+          const v0 = verts[ei];
+          const v1 = verts[(ei + 1) % count];
+          const edx = v1[0] - v0[0];
+          const edz = v1[1] - v0[1];
+          // 2D outward normal: perpendicular to edge direction
+          let nx = edz, nz = -edx;
+          const nLen = Math.sqrt(nx * nx + nz * nz);
+          if (nLen > 1e-12) { nx /= nLen; nz /= nLen; }
+          // Ensure outward: dot(normal, midpoint) should be positive
+          // (vertices are centered around centroid = origin in local space)
+          const mx = (v0[0] + v1[0]) * 0.5;
+          const mz = (v0[1] + v1[1]) * 0.5;
+          if (nx * mx + nz * mz < 0) { nx = -nx; nz = -nz; }
+
+          // Transform local [nx, 0, nz] to world via rotation matrix
+          const m = eulerToMatrix3(shape.rotation[0], shape.rotation[1], shape.rotation[2]);
+          const axisDir: Vec3 = [
+            m[0] * nx + m[6] * nz,
+            m[1] * nx + m[7] * nz,
+            m[2] * nx + m[8] * nz,
+          ];
+
+          const startT = projectRayOnAxisDir(
+            camera, canvas, clientX, clientY,
+            shape.position, axisDir,
+          );
+
+          pushPullDrag = {
+            shapeId: shape.id,
+            axisIdx: face.axisIdx,
+            negative: face.negative,
+            axisDir,
+            startT,
+            startPos: [...shape.position] as Vec3,
+            startSize: [...shape.size] as Vec3,
+            startScale: shape.scale,
+            axis: face.axis,
+            edgeIdx: ei,
+            edgeNormal2D: [nx, nz],
+            startVertices: verts.map(v => [...v] as [number, number]),
+            startBoundingRadius: shape.size[0],
+          };
+          return;
+        }
+
         // Compute world-space axis direction (shape-aware)
         let axisDir: Vec3;
         if (shape.type === "sphere") {
@@ -253,6 +376,88 @@ export function setupPointer(
           axis: face.axis,
         };
       });
+      return;
+    }
+
+    // --- Polygon pen tool handling ---
+    if (tool === "polygon") {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+
+      const { phase } = sceneState.drag;
+
+      // Height phase: commit on click
+      if (phase === "height") {
+        commitHeight();
+        return;
+      }
+
+      // Vertex placement phase
+      const floorHit = getFloorPoint(e, canvas, camera);
+
+      // Check screen-space close before async GPU pick
+      if (isNearFirstVertex(e.clientX, e.clientY)) {
+        closePen(0.10);
+        return;
+      }
+
+      // Pre-compute plane projection for subsequent vertices (event won't survive async)
+      const penPlaneHit = sceneState.penVertices.length > 0
+        ? getPlanePoint(e, canvas, camera, sceneState.penFloorY)
+        : null;
+
+      // Try GPU pick for surface placement
+      const dpr = window.devicePixelRatio;
+      const rect = canvas.getBoundingClientRect();
+      const pixelX = (e.clientX - rect.left) * dpr;
+      const pixelY = (e.clientY - rect.top) * dpr;
+      const renderer = getRenderer();
+
+      if (renderer) {
+        renderer.pickWorldPos(pixelX, pixelY).then((result) => {
+          if (sceneState.activeTool !== "polygon") return;
+          if (sceneState.drag.phase === "height") return;
+
+          const verts = sceneState.penVertices;
+
+          if (verts.length === 0) {
+            // First vertex: establish the drawing plane from the hit Y
+            let x: number, z: number, floorY: number;
+            if (result) {
+              x = result.worldPos[0];
+              z = result.worldPos[2];
+              floorY = result.worldPos[1];
+            } else if (floorHit) {
+              x = floorHit[0];
+              z = floorHit[2];
+              floorY = FLOOR_Y;
+            } else {
+              return;
+            }
+            sceneState.penFloorY = floorY;
+            addPenVertex(x, z);
+          } else {
+            // Subsequent vertices: project onto the established penFloorY plane
+            if (!penPlaneHit) return;
+            addPenVertex(penPlaneHit[0], penPlaneHit[2]);
+          }
+
+          // Auto-close at max vertices
+          if (sceneState.penVertices.length >= 16) {
+            closePen(0.10);
+          }
+        });
+      } else if (floorHit) {
+        const verts = sceneState.penVertices;
+        if (verts.length === 0) {
+          sceneState.penFloorY = FLOOR_Y;
+        }
+        addPenVertex(floorHit[0], floorHit[2]);
+        if (sceneState.penVertices.length >= 16) {
+          closePen(0.10);
+        }
+      }
       return;
     }
 
@@ -325,6 +530,17 @@ export function setupPointer(
   }
 
   function onPointerMove(e: PointerEvent) {
+    // --- Pen tool cursor tracking ---
+    if (sceneState.activeTool === "polygon" && sceneState.penVertices.length > 0 && sceneState.drag.phase !== "height") {
+      const floorY = sceneState.penFloorY;
+      const pt = getPlanePoint(e, canvas, camera, floorY);
+      if (pt) {
+        sceneRefs.penCursorXZ = [pt[0], pt[2]];
+      }
+    } else {
+      sceneRefs.penCursorXZ = null;
+    }
+
     // --- Push/Pull drag ---
     if (pushPullDrag) {
       e.stopImmediatePropagation();
@@ -336,6 +552,20 @@ export function setupPointer(
 
       const shape = sceneState.shapes.find((s) => s.id === pushPullDrag!.shapeId);
       if (!shape) return;
+
+      // Polygon edge drag: offset edge along normal, constrain adjacent edges
+      if (pushPullDrag.edgeIdx !== undefined && pushPullDrag.edgeNormal2D && pushPullDrag.startVertices) {
+        const localDelta = delta / shape.scale;
+        const [nx, nz] = pushPullDrag.edgeNormal2D;
+        const newVerts = pushPullPolyEdge(pushPullDrag.startVertices, pushPullDrag.edgeIdx, nx, nz, localDelta);
+        shape.vertices = newVerts;
+        // Recompute bounding radius
+        let maxR = 0;
+        for (const [vx, vz] of newVerts) maxR = Math.max(maxR, Math.sqrt(vx * vx + vz * vz));
+        shape.size = [maxR, shape.size[1], shape.size[2]];
+        sceneState.version++;
+        return;
+      }
 
       const { newSize, newPos } = computeFaceDrag(pushPullDrag, delta, shape.type, pushPullDrag.axis);
       shape.size = newSize;
@@ -427,7 +657,7 @@ export function setupPointer(
       if (!visibleLayerIds.has(shape.layerId)) continue;
       const sr = worldAABBToScreenRect(
         shape.position, shape.size, shape.rotation, shape.scale,
-        vpMat, cw, ch,
+        vpMat, cw, ch, shape.vertices,
       );
       if (!sr) continue;
       if (sr.minX >= mLeft && sr.minY >= mTop && sr.maxX <= mRight && sr.maxY <= mBottom) {
@@ -449,6 +679,10 @@ export function setupPointer(
 
   /** Single-pixel click select via GPU pick. */
   function selectClick(clientX: number, clientY: number, shift: boolean) {
+    if (sceneRefs.pointerConsumed) {
+      sceneRefs.pointerConsumed = false;
+      return;
+    }
     const renderer = getRenderer();
     if (!renderer) return;
     const { px, py } = cssRectToDevicePixels(clientX, clientY, 0, 0, canvas);
@@ -472,6 +706,31 @@ export function setupPointer(
 
       const shape = sceneState.shapes.find((s) => s.id === pushPullDrag!.shapeId);
       if (shape) {
+        // Polygon edge commit
+        if (pushPullDrag.edgeIdx !== undefined && pushPullDrag.edgeNormal2D && pushPullDrag.startVertices) {
+          const currentT = projectRayOnAxisDir(
+            camera, canvas, e.clientX, e.clientY,
+            pushPullDrag.startPos, pushPullDrag.axisDir,
+          );
+          const delta = currentT - pushPullDrag.startT;
+          const localDelta = delta / shape.scale;
+          const [nx, nz] = pushPullDrag.edgeNormal2D;
+
+          // Build final vertices with constrained adjacent edges
+          const finalVerts = pushPullPolyEdge(pushPullDrag.startVertices, pushPullDrag.edgeIdx, nx, nz, localDelta);
+
+          // Restore to start state before undo commit
+          shape.vertices = pushPullDrag.startVertices.map(v => [...v] as [number, number]);
+          shape.size = [pushPullDrag.startBoundingRadius!, shape.size[1], shape.size[2]];
+          sceneState.version++;
+
+          // Commit via editPolyVertices (pushes undo)
+          editPolyVertices(pushPullDrag.shapeId, finalVerts);
+
+          pushPullDrag = null;
+          return;
+        }
+
         const currentT = projectRayOnAxisDir(
           camera, canvas, e.clientX, e.clientY,
           pushPullDrag.startPos, pushPullDrag.axisDir,
@@ -538,6 +797,20 @@ export function setupPointer(
   }
 
   function onDblClick(e: MouseEvent) {
+    // Polygon tool: double-click to close polygon
+    if (sceneState.activeTool === "polygon") {
+      if (sceneState.penVertices.length >= 3 && sceneState.drag.phase !== "height") {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        // The second click of the dblclick already added a duplicate vertex — remove it
+        sceneState.penVertices.pop();
+        if (sceneState.penVertices.length >= 3) {
+          closePen(0.10);
+        }
+      }
+      return;
+    }
+
     if (sceneState.activeTool !== "select") return;
     if (e.button !== 0) return;
 

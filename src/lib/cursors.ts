@@ -13,19 +13,29 @@ import { subscribe } from "valtio";
 import { sceneState, isShapeTool } from "../state/sceneStore";
 import crosshairSvg from "../assets/cursors/crosshair.svg?raw";
 import orbitSvg from "../assets/cursors/orbit.svg?raw";
+import pushPull from "../assets/cursors/pushPull.svg?raw";
+import mousePointer from "../assets/cursors/mousePointer.svg?raw";
 
 function svgToDataUri(svg: string): string {
   return `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
 }
 
+const mousePointerInverted = mousePointer
+  .replace(/fill:white/g, "fill:__BLACK__")
+  .replace(/stroke:black/g, "stroke:white")
+  .replace(/fill:__BLACK__/g, "fill:black");
+
 export type CursorName = keyof typeof CURSORS;
 
-const CURSORS = {
-  default:   "default",
+export const CURSORS = {
+  default: "default",
   crosshair: `${svgToDataUri(crosshairSvg)} 12 12, crosshair`,
-  grab:      "grab",
-  grabbing:  "grabbing",
-  orbit:     `${svgToDataUri(orbitSvg)} 12 12, default`,
+  grab: "grab",
+  grabbing: "grabbing",
+  orbit: `${svgToDataUri(orbitSvg)} 12 12, default`,
+  pushpull: `${svgToDataUri(pushPull)} 12 12, default`,
+  mousePointer: `${svgToDataUri(mousePointer)} 1 1, default`,
+  mousePointerInverted: `${svgToDataUri(mousePointerInverted)} 1 1, default`,
 } as const;
 
 let currentCanvas: HTMLCanvasElement | null = null;
@@ -41,14 +51,17 @@ export function bindCursorCanvas(canvas: HTMLCanvasElement) {
 export function setCursor(name: CursorName | null) {
   override = name;
   if (currentCanvas) {
-    currentCanvas.style.cursor = override
-      ? CURSORS[override]
-      : toolCursor();
+    currentCanvas.style.cursor = override ? CURSORS[override] : toolCursor();
   }
 }
 
 function toolCursor(): string {
-  return isShapeTool(sceneState.activeTool) ? CURSORS.crosshair : CURSORS.default;
+  if (sceneState.activeTool === "pushpull") return CURSORS.pushpull;
+  if (sceneState.editMode === "edit") return CURSORS.mousePointer;
+
+  return isShapeTool(sceneState.activeTool)
+    ? CURSORS.crosshair
+    : CURSORS.default;
 }
 
 function applyToolCursor() {

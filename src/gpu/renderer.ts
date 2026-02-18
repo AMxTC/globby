@@ -114,6 +114,7 @@ export class GPURenderer {
   // Buffers
   private bakeParamsBuffer!: GPUBuffer;
   private shapeBuffer!: GPUBuffer;
+  private polygonVertexBuffer!: GPUBuffer;
   private reduceParamsBuffer!: GPUBuffer;
   private uniformBuffer!: GPUBuffer;
 
@@ -254,6 +255,12 @@ export class GPURenderer {
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
     });
 
+    // Polygon vertex buffer: MAX_SHAPES * 16 vec2s * 8 bytes = MAX_SHAPES * 128 bytes
+    this.polygonVertexBuffer = this.device.createBuffer({
+      size: MAX_SHAPES * 16 * 2 * 4,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    });
+
     // Reduce params: 32 bytes per chunk, 256-byte aligned, up to 64 chunks per batch
     this.reduceParamsBuffer = this.device.createBuffer({
       size: 256 * 64,
@@ -310,6 +317,11 @@ export class GPURenderer {
             format: "r32uint",
             viewDimension: "3d",
           },
+        },
+        {
+          binding: 4,
+          visibility: GPUShaderStage.COMPUTE,
+          buffer: { type: "read-only-storage" },
         },
       ],
     });
@@ -754,7 +766,9 @@ export class GPURenderer {
         // fx_info: bits 0-7 = shape fx slot, bits 8-15 = layer fx slot (applied to all shapes in layer)
         const sfxSlot = shapeIdToFxSlot.get(s.id) ?? 0;
         const lfxSlot = layerIdToFxSlot.get(s.layerId) ?? 0;
-        u32[off + 12] = (sfxSlot & 0xFF) | ((lfxSlot & 0xFF) << 8);
+        const cappedBit = (s.capped !== false ? 1 : 0) << 16;
+        const wallThick = Math.round(Math.max(0, Math.min(1, (s.wallThickness ?? 0.03) / 0.5)) * 32767) & 0x7FFF;
+        u32[off + 12] = (sfxSlot & 0xFF) | ((lfxSlot & 0xFF) << 8) | cappedBit | (wallThick << 17);
         // Pack shape fx params (16-bit each)
         const sfp = s.fxParams ?? [0, 0, 0];
         const sp0 = Math.round(Math.max(0, Math.min(1, sfp[0])) * 65535);
@@ -770,6 +784,21 @@ export class GPURenderer {
         u32[off + 15] = (lp1 & 0xFFFF) | ((lp2 & 0xFFFF) << 16);
       }
       this.device.queue.writeBuffer(this.shapeBuffer, 0, buf);
+
+      // Write polygon vertex data (16 vec2s per shape slot)
+      const polyBuf = new Float32Array(shapeCount * 16 * 2);
+      for (let i = 0; i < shapeCount; i++) {
+        const s = sorted[i];
+        if (s.type === "polygon" && s.vertices) {
+          const baseOff = i * 16 * 2; // 16 vec2s = 32 floats per shape
+          const count = Math.min(s.vertices.length, 16);
+          for (let v = 0; v < count; v++) {
+            polyBuf[baseOff + v * 2 + 0] = s.vertices[v][0];
+            polyBuf[baseOff + v * 2 + 1] = s.vertices[v][1];
+          }
+        }
+      }
+      this.device.queue.writeBuffer(this.polygonVertexBuffer, 0, polyBuf);
     }
 
     if (dirtyChunks.length === 0) return;
@@ -825,6 +854,7 @@ export class GPURenderer {
           { binding: 1, resource: { buffer: this.shapeBuffer } },
           { binding: 2, resource: atlasView },
           { binding: 3, resource: shapeIdAtlasView },
+          { binding: 4, resource: { buffer: this.polygonVertexBuffer } },
         ],
       });
 
@@ -864,6 +894,7 @@ export class GPURenderer {
     width: number,
     height: number,
     wireframes: WireframeBox[],
+    extraLines?: { verts: Float32Array; color: [number, number, number, number] }[],
   ): void {
     // Write uniforms (240 bytes) — reuse pre-allocated buffer
     const f32 = this.uniformF32;
@@ -945,7 +976,8 @@ export class GPURenderer {
     pass.end();
 
     // Lines pass (wireframes overlay)
-    if (wireframes.length > 0) {
+    const hasExtraLines = extraLines && extraLines.length > 0;
+    if (wireframes.length > 0 || hasExtraLines) {
       const linesPass = encoder.beginRenderPass({
         colorAttachments: [
           {
@@ -1020,6 +1052,28 @@ export class GPURenderer {
         linesPass.draw(draw.vertexCount);
       }
 
+      // Draw extra line segments (e.g., pen tool preview)
+      if (hasExtraLines) {
+        for (const lineGroup of extraLines!) {
+          if (lineGroup.verts.length < 6) continue; // need at least 2 vertices (6 floats)
+          const lineUniforms = new Float32Array(20);
+          lineUniforms.set(viewProjectionMatrix, 0);
+          lineUniforms[16] = lineGroup.color[0];
+          lineUniforms[17] = lineGroup.color[1];
+          lineUniforms[18] = lineGroup.color[2];
+          lineUniforms[19] = lineGroup.color[3];
+          this.device.queue.writeBuffer(this.linesUniformBuffer, uniformSlot * 256, lineUniforms);
+          this.device.queue.writeBuffer(this.linesVertexBuffer, vertexOffset, lineGroup.verts);
+
+          linesPass.setBindGroup(0, bindGroup, [uniformSlot * 256]);
+          linesPass.setVertexBuffer(0, this.linesVertexBuffer, vertexOffset);
+          linesPass.draw(lineGroup.verts.length / 3);
+
+          vertexOffset += lineGroup.verts.byteLength;
+          uniformSlot++;
+        }
+      }
+
       linesPass.end();
     }
 
@@ -1062,6 +1116,7 @@ export class GPURenderer {
     this.regionStagingBuffer?.destroy();
     this.bakeParamsBuffer?.destroy();
     this.shapeBuffer?.destroy();
+    this.polygonVertexBuffer?.destroy();
     this.reduceParamsBuffer?.destroy();
     this.uniformBuffer?.destroy();
     this.linesVertexBuffer?.destroy();

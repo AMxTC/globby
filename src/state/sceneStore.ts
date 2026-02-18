@@ -1,6 +1,6 @@
 import { proxy } from "valtio";
 import { SHAPE_TYPES, type ShapeType, type TransferMode } from "../constants";
-import { rotateVecAroundAxis, composeWorldRotation } from "../lib/math3d";
+import { rotateVecAroundAxis, composeWorldRotation, eulerToMatrix3 } from "../lib/math3d";
 
 export type Vec3 = [number, number, number];
 
@@ -14,6 +14,9 @@ export interface SDFShape {
   layerId: string;
   fx?: string; // WGSL function body, undefined = identity
   fxParams?: Vec3; // Runtime fx params [0..1] packed into GPU buffer
+  vertices?: [number, number][]; // 2D XZ polygon vertices (max 16), only for polygon type
+  capped?: boolean; // Polygon extrusion: true (default) = solid, false = walls only
+  wallThickness?: number; // Wall thickness when uncapped (world units, default 0.03)
 }
 
 export interface Layer {
@@ -86,6 +89,8 @@ export const sceneState = proxy({
   marquee: null as { x1: number; y1: number; x2: number; y2: number } | null,
   fxError: null as string | null,
   fxCompiling: false,
+  penVertices: [] as [number, number][],
+  penFloorY: 0,
   version: 1,
 });
 
@@ -104,6 +109,9 @@ type ShapeSnapshot = {
   layerId: string;
   fx?: string;
   fxParams?: Vec3;
+  vertices?: [number, number][];
+  capped?: boolean;
+  wallThickness?: number;
 }[];
 
 interface SceneSnapshot {
@@ -128,6 +136,9 @@ function snapshot(): SceneSnapshot {
       layerId: s.layerId,
       fx: s.fx,
       fxParams: s.fxParams ? [...s.fxParams] as Vec3 : undefined,
+      vertices: s.vertices ? s.vertices.map(v => [...v] as [number, number]) : undefined,
+      capped: s.capped,
+      wallThickness: s.wallThickness,
     })),
     layers: sceneState.layers.map((l) => ({ ...l })),
     activeLayerId: sceneState.activeLayerId,
@@ -171,20 +182,85 @@ export function redo() {
 
 export function addShape(shape: Omit<SDFShape, "id" | "layerId">) {
   pushUndo();
-  sceneState.shapes.push({
+  const newShape: SDFShape = {
     ...shape,
     id: String(nextId++),
     layerId: sceneState.activeLayerId,
-  });
+  };
+  sceneState.shapes.push(newShape);
   sceneState.version++;
 }
 
 export function setTool(tool: "select" | "pushpull" | ShapeType) {
+  if (sceneState.activeTool === "polygon" && tool !== "polygon") {
+    cancelPen();
+  }
   sceneState.activeTool = tool;
 }
 
 export function isShapeTool(tool: string): tool is ShapeType {
   return (SHAPE_TYPES as readonly string[]).includes(tool);
+}
+
+export function isDrawTool(tool: string): boolean {
+  return tool === "polygon";
+}
+
+// --- Pen tool ---
+
+const MAX_PEN_VERTICES = 16;
+
+export function addPenVertex(x: number, z: number) {
+  if (sceneState.penVertices.length >= MAX_PEN_VERTICES) return;
+  sceneState.penVertices.push([x, z]);
+}
+
+export function closePen(height: number) {
+  const verts = sceneState.penVertices;
+  if (verts.length < 3) {
+    cancelPen();
+    return;
+  }
+
+  // Center vertices around bounding box center for tightest AABB
+  let minX = Infinity, maxX = -Infinity;
+  let minZ = Infinity, maxZ = -Infinity;
+  for (const [vx, vz] of verts) {
+    if (vx < minX) minX = vx;
+    if (vx > maxX) maxX = vx;
+    if (vz < minZ) minZ = vz;
+    if (vz > maxZ) maxZ = vz;
+  }
+  const cx = (minX + maxX) / 2;
+  const cz = (minZ + maxZ) / 2;
+
+  const centered = verts.map(([vx, vz]) => [vx - cx, vz - cz] as [number, number]);
+
+  // Compute bounding radius for AABB
+  let maxR = 0;
+  for (const [vx, vz] of centered) {
+    const r = Math.sqrt(vx * vx + vz * vz);
+    if (r > maxR) maxR = r;
+  }
+
+  const halfH = height / 2;
+  const floorY = sceneState.penFloorY;
+
+  addShape({
+    type: "polygon",
+    position: [cx, floorY + halfH, cz],
+    rotation: [0, 0, 0],
+    size: [maxR, halfH, verts.length], // size.x=bounding radius, size.y=halfHeight, size.z=vertex count
+    scale: 1,
+    vertices: centered,
+  });
+
+  cancelPen();
+}
+
+export function cancelPen() {
+  sceneState.penVertices.splice(0, sceneState.penVertices.length);
+  sceneState.penFloorY = 0;
 }
 
 // --- Layer CRUD ---
@@ -403,7 +479,11 @@ export function updateHeight(worldY: number) {
   const height = Math.max(worldY - floor, 0.01);
   const halfY = height / 2;
 
-  if (tool === "box") {
+  if (tool === "polygon") {
+    // Polygon height phase: just update the height preview
+    sceneState.drag.previewPosition = [baseMidX, floor + halfY, baseMidZ];
+    sceneState.drag.previewSize = [0.01, halfY, 0.01];
+  } else if (tool === "box") {
     sceneState.drag.previewPosition = [baseMidX, floor + halfY, baseMidZ];
     sceneState.drag.previewSize = [baseHalfX, halfY, baseHalfZ];
   } else {
@@ -415,8 +495,10 @@ export function updateHeight(worldY: number) {
 
 export function commitHeight() {
   if (sceneState.drag.phase !== "height") return;
-  const { previewPosition, previewSize } = sceneState.drag;
   const tool = sceneState.activeTool;
+
+
+  const { previewPosition, previewSize } = sceneState.drag;
 
   addShape({
     type: tool as ShapeType,
@@ -448,6 +530,7 @@ function resetDrag() {
 export function selectShape(id: string | null) {
   sceneState.selectedShapeIds = id ? [id] : [];
   sceneState.editMode = "object";
+  sceneRefs.selectedPolyVertIdx = null;
 }
 
 export function toggleShapeSelection(id: string) {
@@ -499,6 +582,9 @@ export function duplicateShape(id: string): string | null {
     layerId: shape.layerId,
     fx: shape.fx,
     fxParams: shape.fxParams ? [...shape.fxParams] as Vec3 : undefined,
+    vertices: shape.vertices ? shape.vertices.map(v => [...v] as [number, number]) : undefined,
+    capped: shape.capped,
+    wallThickness: shape.wallThickness,
   });
   sceneState.selectedShapeIds = [newId];
   sceneState.version++;
@@ -524,6 +610,9 @@ export function duplicateSelectedShapes(): string[] {
       layerId: shape.layerId,
       fx: shape.fx,
       fxParams: shape.fxParams ? [...shape.fxParams] as Vec3 : undefined,
+      vertices: shape.vertices ? shape.vertices.map(v => [...v] as [number, number]) : undefined,
+      capped: shape.capped,
+      wallThickness: shape.wallThickness,
     });
     newIds.push(newId);
   }
@@ -640,6 +729,101 @@ export function enterEditMode() {
 
 export function exitEditMode() {
   sceneState.editMode = "object";
+  sceneRefs.selectedPolyVertIdx = null;
+}
+
+export function editPolyVertices(shapeId: string, newVerts: [number, number][]) {
+  pushUndo();
+  const shape = sceneState.shapes.find(s => s.id === shapeId);
+  if (!shape) return;
+  shape.vertices = newVerts.map(v => [...v] as [number, number]);
+  // Recompute bounding radius
+  let maxR = 0;
+  for (const [vx, vz] of newVerts) maxR = Math.max(maxR, Math.sqrt(vx * vx + vz * vz));
+  shape.size = [maxR, shape.size[1], shape.size[2]];
+  sceneState.version++;
+}
+
+export function insertPolyVertex(shapeId: string, afterIdx: number, localXZ: [number, number]) {
+  const shape = sceneState.shapes.find(s => s.id === shapeId);
+  if (!shape?.vertices || shape.vertices.length >= MAX_PEN_VERTICES) return;
+  pushUndo();
+  shape.vertices.splice(afterIdx + 1, 0, localXZ);
+  // Recompute bounding radius
+  let maxR = 0;
+  for (const [vx, vz] of shape.vertices) maxR = Math.max(maxR, Math.sqrt(vx * vx + vz * vz));
+  shape.size = [maxR, shape.size[1], shape.vertices.length];
+  sceneState.version++;
+}
+
+export function deletePolyVertex(shapeId: string, vertIdx: number) {
+  const shape = sceneState.shapes.find(s => s.id === shapeId);
+  if (!shape?.vertices || shape.vertices.length <= 3) return;
+  if (vertIdx < 0 || vertIdx >= shape.vertices.length) return;
+  pushUndo();
+  shape.vertices.splice(vertIdx, 1);
+  // Recompute bounding radius
+  let maxR = 0;
+  for (const [vx, vz] of shape.vertices) maxR = Math.max(maxR, Math.sqrt(vx * vx + vz * vz));
+  shape.size = [maxR, shape.size[1], shape.vertices.length];
+  sceneRefs.selectedPolyVertIdx = null;
+  sceneState.version++;
+}
+
+export function setShapeCapped(shapeId: string, capped: boolean) {
+  const shape = sceneState.shapes.find(s => s.id === shapeId);
+  if (!shape) return;
+  pushUndo();
+  shape.capped = capped;
+  sceneState.version++;
+}
+
+export function setShapeWallThickness(shapeId: string, thickness: number) {
+  const shape = sceneState.shapes.find(s => s.id === shapeId);
+  if (!shape) return;
+  shape.wallThickness = Math.max(0.01, Math.min(0.5, thickness));
+  sceneState.version++;
+}
+
+/** Recenter polygon vertices around their centroid, adjusting position to compensate. */
+export function recenterPolygon(shapeId: string) {
+  const shape = sceneState.shapes.find(s => s.id === shapeId);
+  if (!shape?.vertices || shape.vertices.length < 3) return;
+
+  // Use bounding box center (not centroid) for tightest AABB
+  let minX = Infinity, maxX = -Infinity;
+  let minZ = Infinity, maxZ = -Infinity;
+  for (const [vx, vz] of shape.vertices) {
+    if (vx < minX) minX = vx;
+    if (vx > maxX) maxX = vx;
+    if (vz < minZ) minZ = vz;
+    if (vz > maxZ) maxZ = vz;
+  }
+  const cx = (minX + maxX) / 2;
+  const cz = (minZ + maxZ) / 2;
+
+  // Skip if already centered
+  if (Math.abs(cx) < 1e-6 && Math.abs(cz) < 1e-6) return;
+
+  pushUndo();
+
+  // Recenter vertices
+  shape.vertices = shape.vertices.map(([vx, vz]) => [vx - cx, vz - cz] as [number, number]);
+
+  // Transform local centroid offset to world space and adjust position
+  const m = eulerToMatrix3(shape.rotation[0], shape.rotation[1], shape.rotation[2]);
+  const s = shape.scale;
+  shape.position = [
+    shape.position[0] + (m[0] * cx + m[6] * cz) * s,
+    shape.position[1] + (m[1] * cx + m[7] * cz) * s,
+    shape.position[2] + (m[2] * cx + m[8] * cz) * s,
+  ];
+
+  // Recompute bounding radius
+  let maxR = 0;
+  for (const [vx, vz] of shape.vertices) maxR = Math.max(maxR, Math.sqrt(vx * vx + vz * vz));
+  shape.size = [maxR, shape.size[1], shape.size[2]];
+  sceneState.version++;
 }
 
 // Non-proxied refs for Three.js objects (valtio proxy would break them)
@@ -649,14 +833,35 @@ export const sceneRefs: {
     | import("three/examples/jsm/controls/OrbitControls.js").OrbitControls
     | null;
   canvas: HTMLCanvasElement | null;
-  updateGizmoOverlay:
+  updateTranslateGumball:
     | ((vpMat: import("three").Matrix4, w: number, h: number) => void)
     | null;
+  updateEditGizmo:
+    | ((vpMat: import("three").Matrix4, w: number, h: number) => void)
+    | null;
+  updatePenOverlay:
+    | ((vpMat: import("three").Matrix4, w: number, h: number) => void)
+    | null;
+  penCursorXZ: [number, number] | null;
+  editPolyDragIdx: number | null;
+  editPolyStartVerts: [number, number][] | null;
+  editPolyStartPos: Vec3 | null;
+  selectedPolyVertIdx: number | null;
+  /** Set true by overlay handlers to suppress the next canvas select/deselect */
+  pointerConsumed: boolean;
 } = {
   camera: null,
   controls: null,
   canvas: null,
-  updateGizmoOverlay: null,
+  updateTranslateGumball: null,
+  updateEditGizmo: null,
+  updatePenOverlay: null,
+  penCursorXZ: null,
+  editPolyDragIdx: null,
+  editPolyStartVerts: null,
+  editPolyStartPos: null,
+  selectedPolyVertIdx: null,
+  pointerConsumed: false,
 };
 
 declare global {

@@ -3,13 +3,15 @@ import { Matrix4 } from "three";
 import { useSnapshot } from "valtio";
 import { sceneState, sceneRefs, type SDFShape } from "./state/sceneStore";
 import { GPURenderer, type WireframeBox } from "./gpu/renderer";
-import { rotatedAABBHalfExtents } from "./lib/math3d";
+import { rotatedAABBHalfExtents, polyHalfExtents } from "./lib/math3d";
 import { CHUNK_WORLD_SIZE } from "./constants";
 import { createOrbitCamera } from "./gpu/orbit";
 import { setupPointer } from "./gpu/pointer";
 import Toolbar from "./components/Toolbar";
 import SidePanel from "./components/SidePanel";
-import GizmoOverlay from "./components/GizmoOverlay";
+import TranslateGumball from "./components/gizmo/TranslateGumball";
+import EditGizmo from "./components/gizmo/EditGizmo";
+import PenOverlay from "./components/PenOverlay";
 import { themeState } from "./state/themeStore";
 import { setupHotkeys } from "./lib/hotkeys";
 import { bindCursorCanvas } from "./lib/cursors";
@@ -131,7 +133,7 @@ export default function App() {
 
         // Show drag preview
         const drag = sceneState.drag;
-        if (drag.active) {
+        if (drag.active && sceneState.activeTool !== "polygon") {
           wireframes.push({
             center: [...drag.previewPosition] as [number, number, number],
             halfSize: [...drag.previewSize] as [number, number, number],
@@ -149,9 +151,12 @@ export default function App() {
         if (selectedIds.length === 1) {
           const shape = sceneState.shapes.find((s) => s.id === selectedIds[0]);
           if (shape) {
+            const hs: [number, number, number] = shape.vertices && shape.vertices.length > 0
+              ? polyHalfExtents(shape.size, shape.vertices) as [number, number, number]
+              : [...shape.size] as [number, number, number];
             wireframes.push({
               center: [...shape.position] as [number, number, number],
-              halfSize: [...shape.size] as [number, number, number],
+              halfSize: hs,
               color: selColor,
               rotation: [...shape.rotation] as [number, number, number],
               scale: shape.scale,
@@ -164,7 +169,7 @@ export default function App() {
           const idSet = new Set(selectedIds);
           for (const shape of sceneState.shapes) {
             if (!idSet.has(shape.id)) continue;
-            const he = rotatedAABBHalfExtents(shape.size, shape.rotation, shape.scale);
+            const he = rotatedAABBHalfExtents(shape.size, shape.rotation, shape.scale, shape.vertices);
             minX = Math.min(minX, shape.position[0] - he[0]);
             minY = Math.min(minY, shape.position[1] - he[1]);
             minZ = Math.min(minZ, shape.position[2] - he[2]);
@@ -181,8 +186,32 @@ export default function App() {
           }
         }
 
-        // Update SVG gizmo overlay
-        sceneRefs.updateGizmoOverlay?.(viewProjMat, canvas!.clientWidth, canvas!.clientHeight);
+        // Pen tool wireframe preview
+        const extraLines: { verts: Float32Array; color: [number, number, number, number] }[] = [];
+        const penVerts = sceneState.penVertices;
+        if (penVerts.length >= 2) {
+          const floorY = sceneState.penFloorY + 0.001; // slight offset to avoid z-fighting
+          // Build line segments between consecutive vertices
+          const lineCount = penVerts.length; // N edges for N vertices (last connects back implicitly if in height phase)
+          const isHeightPhase = sceneState.drag.phase === "height";
+          const segCount = isHeightPhase ? penVerts.length : penVerts.length - 1;
+          const verts = new Float32Array(segCount * 2 * 3);
+          for (let i = 0; i < segCount; i++) {
+            const j = (i + 1) % penVerts.length;
+            verts[i * 6 + 0] = penVerts[i][0];
+            verts[i * 6 + 1] = floorY;
+            verts[i * 6 + 2] = penVerts[i][1];
+            verts[i * 6 + 3] = penVerts[j][0];
+            verts[i * 6 + 4] = floorY;
+            verts[i * 6 + 5] = penVerts[j][1];
+          }
+          extraLines.push({ verts, color: wireframeColor });
+        }
+
+        // Update SVG overlays
+        sceneRefs.updateTranslateGumball?.(viewProjMat, canvas!.clientWidth, canvas!.clientHeight);
+        sceneRefs.updateEditGizmo?.(viewProjMat, canvas!.clientWidth, canvas!.clientHeight);
+        sceneRefs.updatePenOverlay?.(viewProjMat, canvas!.clientWidth, canvas!.clientHeight);
 
         // Debug: world bounds (first so it's never dropped) + chunk boundaries
         if (sceneState.showDebugChunks) {
@@ -239,6 +268,7 @@ export default function App() {
           canvas!.width,
           canvas!.height,
           wireframes,
+          extraLines,
         );
 
         animId = requestAnimationFrame(frame);
@@ -286,7 +316,9 @@ export default function App() {
   return (
     <div className="w-screen h-screen relative">
       <canvas ref={canvasRef} className="w-full h-full block bg-muted" />
-      <GizmoOverlay />
+      <TranslateGumball />
+      <EditGizmo />
+      <PenOverlay />
       {snap.showDebugChunks && (
         <pre
           ref={debugHudRef}

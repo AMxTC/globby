@@ -4,6 +4,7 @@ import {
   Circle,
   Cone,
   Cylinder,
+  PenTool,
   MousePointer,
   Pyramid,
 } from "lucide-react";
@@ -45,6 +46,7 @@ function PushPullIcon({ size = 24 }: { size?: number }) {
 }
 
 const PRIMITIVES: { type: ShapeType; icon: typeof Box; title: string }[] = [
+  { type: "polygon", icon: PenTool, title: "Polygon" },
   { type: "box", icon: Box, title: "Box" },
   { type: "sphere", icon: Circle, title: "Sphere" },
   { type: "cylinder", icon: Cylinder, title: "Cylinder" },

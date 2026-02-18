@@ -9,6 +9,7 @@ import {
   selectShape,
   selectAll,
   deleteSelectedShapes,
+  deletePolyVertex,
   cancelDrag,
   setTool,
   isShapeTool,
@@ -76,15 +77,29 @@ const HOTKEYS: HotkeyDef[] = [
   },
   {
     name: "Delete",
-    description: "Delete selected shapes",
+    description: "Delete selected shapes or vertex",
     combo: { key: "Backspace" },
-    action: deleteSelectedShapes,
+    action: () => {
+      if (sceneState.editMode === "edit" && sceneRefs.selectedPolyVertIdx !== null) {
+        const shapeId = sceneState.selectedShapeIds[0];
+        if (shapeId) deletePolyVertex(shapeId, sceneRefs.selectedPolyVertIdx);
+        return;
+      }
+      deleteSelectedShapes();
+    },
   },
   {
     name: "Delete",
-    description: "Delete selected shapes",
+    description: "Delete selected shapes or vertex",
     combo: { key: "Delete" },
-    action: deleteSelectedShapes,
+    action: () => {
+      if (sceneState.editMode === "edit" && sceneRefs.selectedPolyVertIdx !== null) {
+        const shapeId = sceneState.selectedShapeIds[0];
+        if (shapeId) deletePolyVertex(shapeId, sceneRefs.selectedPolyVertIdx);
+        return;
+      }
+      deleteSelectedShapes();
+    },
   },
   {
     name: "Escape",
@@ -132,6 +147,11 @@ const HOTKEYS: HotkeyDef[] = [
           rotation: [...shape.rotation] as Vec3,
           size: [...shape.size] as Vec3,
           scale: shape.scale,
+          fx: shape.fx,
+          fxParams: shape.fxParams ? [...shape.fxParams] as Vec3 : undefined,
+          vertices: shape.vertices ? shape.vertices.map(v => [...v] as [number, number]) : undefined,
+          capped: shape.capped,
+          wallThickness: shape.wallThickness,
         });
       }
     },
@@ -149,6 +169,8 @@ const HOTKEYS: HotkeyDef[] = [
           position: [item.position[0] + 0.2, item.position[1], item.position[2] + 0.2] as Vec3,
           rotation: [...item.rotation] as Vec3,
           size: [...item.size] as Vec3,
+          vertices: item.vertices ? item.vertices.map(v => [...v] as [number, number]) : undefined,
+          fxParams: item.fxParams ? [...item.fxParams] as Vec3 : undefined,
         });
         const last = sceneState.shapes[sceneState.shapes.length - 1];
         if (last) newIds.push(last.id);
@@ -173,6 +195,11 @@ const HOTKEYS: HotkeyDef[] = [
           rotation: [...shape.rotation] as Vec3,
           size: [...shape.size] as Vec3,
           scale: shape.scale,
+          fx: shape.fx,
+          fxParams: shape.fxParams ? [...shape.fxParams] as Vec3 : undefined,
+          vertices: shape.vertices ? shape.vertices.map(v => [...v] as [number, number]) : undefined,
+          capped: shape.capped,
+          wallThickness: shape.wallThickness,
         });
       }
       deleteSelectedShapes();

@@ -23,6 +23,17 @@ function generateShapeEval(shapeVar: string): string {
       case 2u: { d_shape = sdCylinder(local_p, shapes[${shapeVar}].size.y, shapes[${shapeVar}].size.x); }
       case 3u: { d_shape = sdPyramid(local_p, shapes[${shapeVar}].size.y, shapes[${shapeVar}].size.x); }
       case 4u: { d_shape = sdCone(local_p, shapes[${shapeVar}].size.y, shapes[${shapeVar}].size.x); }
+      case 5u: {
+        let base_idx = ${shapeVar} * 16u;
+        let count = u32(shapes[${shapeVar}].size.z + 0.5);
+        let is_capped = (shapes[${shapeVar}].fx_info >> 16u) & 1u;
+        if (is_capped == 1u) {
+          d_shape = sdPolygonExtrusion(local_p, shapes[${shapeVar}].size.y, base_idx, count);
+        } else {
+          let wall_t = f32((shapes[${shapeVar}].fx_info >> 17u) & 0x7FFFu) / 32767.0 * 0.5;
+          d_shape = sdPolygonExtrusionUncapped(local_p, shapes[${shapeVar}].size.y, base_idx, count, wall_t / s);
+        }
+      }
       default: { d_shape = 1e10; }
     }
     d_shape = d_shape * s;`;

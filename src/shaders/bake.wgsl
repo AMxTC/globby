@@ -22,6 +22,7 @@ struct Shape {
 @group(0) @binding(1) var<storage, read> shapes: array<Shape>;
 @group(0) @binding(2) var output: texture_storage_3d<r32float, write>;
 @group(0) @binding(3) var output_id: texture_storage_3d<r32uint, write>;
+@group(0) @binding(4) var<storage, read> poly_verts: array<vec2<f32>>;
 
 fn sdBox(p: vec3<f32>, size: vec3<f32>) -> f32 {
   let q = abs(p) - size;
@@ -84,6 +85,39 @@ fn sdPyramid(p: vec3<f32>, h: f32, r: f32) -> f32 {
   let d2 = select(min(a, b), 0.0, min(q.y, -q.x * m2 - q.y * 0.5) > 0.0);
 
   return sqrt((d2 + q.z * q.z) / m2) * sign(max(q.z, -pp.y)) * 2.0 * r;
+}
+
+fn sdPolygon2D(p: vec2<f32>, base_idx: u32, count: u32) -> f32 {
+  // Signed distance to an arbitrary 2D polygon using winding number
+  var d: f32 = dot(p - poly_verts[base_idx], p - poly_verts[base_idx]);
+  var s: f32 = 1.0;
+  for (var i: u32 = 0u; i < count; i++) {
+    let j = select(i - 1u, count - 1u, i == 0u);
+    let e = poly_verts[base_idx + j] - poly_verts[base_idx + i];
+    let w = p - poly_verts[base_idx + i];
+    let b = w - e * clamp(dot(w, e) / dot(e, e), 0.0, 1.0);
+    d = min(d, dot(b, b));
+    let c0 = p.y >= poly_verts[base_idx + i].y;
+    let c1 = p.y < poly_verts[base_idx + j].y;
+    let c2 = e.x * w.y > e.y * w.x;
+    let c = vec3<bool>(c0, c1, c2);
+    if (all(c) || all(!c)) { s *= -1.0; }
+  }
+  return s * sqrt(d);
+}
+
+fn sdPolygonExtrusion(p: vec3<f32>, h: f32, base_idx: u32, count: u32) -> f32 {
+  let d2d = sdPolygon2D(p.xz, base_idx, count);
+  let dy = abs(p.y) - h;
+  let w = vec2<f32>(d2d, dy);
+  return min(max(w.x, w.y), 0.0) + length(max(w, vec2<f32>(0.0)));
+}
+
+fn sdPolygonExtrusionUncapped(p: vec3<f32>, h: f32, base_idx: u32, count: u32, wall_thickness: f32) -> f32 {
+  let d2d = abs(sdPolygon2D(p.xz, base_idx, count)) - wall_thickness;
+  let dy = abs(p.y) - h;
+  let w = vec2<f32>(d2d, dy);
+  return min(max(w.x, w.y), 0.0) + length(max(w, vec2<f32>(0.0)));
 }
 
 fn smin(a: f32, b: f32, k: f32) -> f32 {
@@ -170,6 +204,17 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
       case 2u: { d_shape = sdCylinder(local_p, shapes[i].size.y, shapes[i].size.x); }
       case 3u: { d_shape = sdPyramid(local_p, shapes[i].size.y, shapes[i].size.x); }
       case 4u: { d_shape = sdCone(local_p, shapes[i].size.y, shapes[i].size.x); }
+      case 5u: {
+        let base_idx = i * 16u;
+        let count = u32(shapes[i].size.z + 0.5);
+        let is_capped = (shapes[i].fx_info >> 16u) & 1u;
+        if (is_capped == 1u) {
+          d_shape = sdPolygonExtrusion(local_p, shapes[i].size.y, base_idx, count);
+        } else {
+          let wall_t = f32((shapes[i].fx_info >> 17u) & 0x7FFFu) / 32767.0 * 0.5;
+          d_shape = sdPolygonExtrusionUncapped(local_p, shapes[i].size.y, base_idx, count, wall_t / s);
+        }
+      }
       default: { d_shape = 1e10; }
     }
     d_shape = d_shape * s;

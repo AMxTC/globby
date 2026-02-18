@@ -42,6 +42,9 @@ import {
   setLayerFx,
   setShapeFxParams,
   setLayerFxParams,
+  recenterPolygon,
+  setShapeCapped,
+  setShapeWallThickness,
 } from "../state/sceneStore";
 import { FxEditor } from "./FxEditor";
 import type { Layer, Vec3 } from "../state/sceneStore";
@@ -630,7 +633,10 @@ export default function SidePanel() {
                     </div>
 
                     {layer.fx != null && (
-                      <span title="Has fx" className="shrink-0 text-muted-foreground flex items-center">
+                      <span
+                        title="Has fx"
+                        className="shrink-0 text-muted-foreground flex items-center"
+                      >
                         <SquareFunction size={14} />
                       </span>
                     )}
@@ -727,6 +733,8 @@ export default function SidePanel() {
               fxError={snap.fxError}
               showShapeFx={showShapeFx}
               onToggleShapeFx={() => setShowShapeFx(!showShapeFx)}
+              capped={selectedShape.capped}
+              wallThickness={selectedShape.wallThickness}
             />
           ) : snap.selectedShapeIds.length > 1 ? (
             <div className="flex items-center justify-center h-full text-[11px] text-muted-foreground">
@@ -881,6 +889,13 @@ const SHAPE_PARAMS: Record<ShapeType, ShapeParamDef[]> = {
       set: (s, v) => [s[0], v / 2, s[2]],
     },
   ],
+  polygon: [
+    {
+      label: "Height",
+      get: (s) => s[1] * 2,
+      set: (s, v) => [s[0], v / 2, s[2]],
+    },
+  ],
 };
 
 // --- Properties content ---
@@ -896,6 +911,8 @@ function PropertiesContent({
   layers,
   fx,
   fxParams,
+  capped,
+  wallThickness,
   fxError,
   showShapeFx,
   onToggleShapeFx,
@@ -911,6 +928,8 @@ function PropertiesContent({
   fx?: string;
   fxParams: Vec3;
   fxError: string | null;
+  capped?: boolean;
+  wallThickness?: number;
   showShapeFx: boolean;
   onToggleShapeFx: () => void;
 }) {
@@ -957,6 +976,39 @@ function PropertiesContent({
           </div>
         ))}
       </div>
+
+      {shapeType === "polygon" && (
+        <>
+          <div className="flex items-center gap-2">
+            <label className="text-[11px] text-muted-foreground w-10 shrink-0">
+              Capped
+            </label>
+            <Toggle
+              pressed={capped !== false}
+              onPressedChange={(v) => setShapeCapped(shapeId, v)}
+              size="sm"
+              className="h-7 px-2 text-[11px]"
+            >
+              {capped !== false ? "On" : "Off"}
+            </Toggle>
+          </div>
+          {capped === false && (
+            <div className="flex items-center gap-2">
+              <label className="text-[11px] text-muted-foreground w-10 shrink-0">
+                Wall
+              </label>
+              <NumberInput
+                value={wallThickness ?? 0.03}
+                onChange={(v) => setShapeWallThickness(shapeId, v)}
+                step={0.01}
+                precision={2}
+                min={0.01}
+                max={0.5}
+              />
+            </div>
+          )}
+        </>
+      )}
 
       <div className="space-y-1">
         <span className="text-[11px] text-muted-foreground uppercase tracking-wide">

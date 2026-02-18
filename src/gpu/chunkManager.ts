@@ -113,7 +113,7 @@ export class ChunkManager {
   private shapeChunks(shape: SDFShape): Set<string> {
     const keys = new Set<string>();
     const [px, py, pz] = shape.position;
-    const [hx, hy, hz] = rotatedAABBHalfExtents(shape.size, shape.rotation, shape.scale);
+    const [hx, hy, hz] = rotatedAABBHalfExtents(shape.size, shape.rotation, shape.scale, shape.vertices);
 
     const minX = Math.floor((px - hx - MARGIN) / CHUNK_WORLD_SIZE);
     const minY = Math.floor((py - hy - MARGIN) / CHUNK_WORLD_SIZE);

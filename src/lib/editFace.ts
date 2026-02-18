@@ -80,16 +80,39 @@ function worldToLocal(worldPos: Vec3, shape: SDFShape): Vec3 {
   ];
 }
 
+/** Squared distance from point (px,pz) to line segment (v0→v1) in 2D. */
+function pointToEdgeDist2D(
+  px: number, pz: number,
+  v0: [number, number], v1: [number, number],
+): number {
+  const ex = v1[0] - v0[0];
+  const ez = v1[1] - v0[1];
+  const wx = px - v0[0];
+  const wz = pz - v0[1];
+  const t = Math.max(0, Math.min(1, (wx * ex + wz * ez) / (ex * ex + ez * ez + 1e-12)));
+  const dx = wx - t * ex;
+  const dz = wz - t * ez;
+  return dx * dx + dz * dz;
+}
+
+export type FaceResult = {
+  axisIdx: number;
+  negative: boolean;
+  axis?: "x" | "y" | "z";
+  edgeIdx?: number;
+};
+
 /**
  * Detect which face of a shape was clicked.
  * Returns the axis index, whether it's the negative face, and an optional
  * axis hint needed by computeFaceDrag for cylinder/cone/pyramid radius branches.
+ * For polygon side faces, also returns edgeIdx.
  * Returns null for unsupported shape types.
  */
 export function detectFace(
   worldPos: Vec3,
   shape: SDFShape,
-): { axisIdx: number; negative: boolean; axis?: "x" | "y" | "z" } | null {
+): FaceResult | null {
   switch (shape.type) {
     case "box": {
       const local = worldToLocal(worldPos, shape);
@@ -138,6 +161,30 @@ export function detectFace(
       }
       // Side/radius drag
       return { axisIdx: 0, negative: false, axis: "x" };
+    }
+    case "polygon": {
+      // Top/bottom faces → height drag (same as cylinder caps)
+      const local = worldToLocal(worldPos, shape);
+      const yRatio = shape.size[1] > 1e-6 ? Math.abs(local[1]) / shape.size[1] : 0;
+      if (yRatio > 0.5) {
+        return { axisIdx: 1, negative: local[1] < 0, axis: "y" };
+      }
+      // Side face: find closest edge
+      const verts = shape.vertices;
+      if (verts && verts.length >= 3) {
+        let bestEdge = 0;
+        let bestDist = Infinity;
+        for (let i = 0; i < verts.length; i++) {
+          const j = (i + 1) % verts.length;
+          const d = pointToEdgeDist2D(local[0], local[2], verts[i], verts[j]);
+          if (d < bestDist) {
+            bestDist = d;
+            bestEdge = i;
+          }
+        }
+        return { axisIdx: 0, negative: false, axis: "x", edgeIdx: bestEdge };
+      }
+      return { axisIdx: 1, negative: false, axis: "y" };
     }
     default:
       return null;

@@ -96,6 +96,16 @@ export function eulerToMatrix3(rx: number, ry: number, rz: number): number[] {
   ];
 }
 
+/** Local-space half-extents for a polygon from its centroid-relative vertices. */
+export function polyHalfExtents(size: Vec3, verts: [number, number][]): Vec3 {
+  let maxX = 0, maxZ = 0;
+  for (const [vx, vz] of verts) {
+    maxX = Math.max(maxX, Math.abs(vx));
+    maxZ = Math.max(maxZ, Math.abs(vz));
+  }
+  return [maxX, size[1], maxZ];
+}
+
 /**
  * Compute world-space AABB half-extents for a rotated+scaled shape.
  * Formula: aabb[i] = sum_j(|R[i][j]| * size[j]) * scale
@@ -104,24 +114,28 @@ export function rotatedAABBHalfExtents(
   size: Vec3,
   rotation: Vec3,
   scale: number,
+  polyVerts?: [number, number][],
 ): Vec3 {
+  const [sx, sy, sz] = polyVerts && polyVerts.length > 0
+    ? polyHalfExtents(size, polyVerts)
+    : size;
   const m = eulerToMatrix3(rotation[0], rotation[1], rotation[2]);
   // m is column-major: m[col*3+row]
   // R row i, col j = m[j*3 + i]
   const hx =
-    (Math.abs(m[0]) * size[0] +
-      Math.abs(m[3]) * size[1] +
-      Math.abs(m[6]) * size[2]) *
+    (Math.abs(m[0]) * sx +
+      Math.abs(m[3]) * sy +
+      Math.abs(m[6]) * sz) *
     scale;
   const hy =
-    (Math.abs(m[1]) * size[0] +
-      Math.abs(m[4]) * size[1] +
-      Math.abs(m[7]) * size[2]) *
+    (Math.abs(m[1]) * sx +
+      Math.abs(m[4]) * sy +
+      Math.abs(m[7]) * sz) *
     scale;
   const hz =
-    (Math.abs(m[2]) * size[0] +
-      Math.abs(m[5]) * size[1] +
-      Math.abs(m[8]) * size[2]) *
+    (Math.abs(m[2]) * sx +
+      Math.abs(m[5]) * sy +
+      Math.abs(m[8]) * sz) *
     scale;
   return [hx, hy, hz];
 }
@@ -138,8 +152,9 @@ export function worldAABBToScreenRect(
   vpMat: Matrix4,
   screenW: number,
   screenH: number,
+  polyVerts?: [number, number][],
 ): { minX: number; minY: number; maxX: number; maxY: number } | null {
-  const he = rotatedAABBHalfExtents(size, rotation, scale);
+  const he = rotatedAABBHalfExtents(size, rotation, scale, polyVerts);
   let minX = Infinity, minY = Infinity;
   let maxX = -Infinity, maxY = -Infinity;
   // Project all 8 AABB corners

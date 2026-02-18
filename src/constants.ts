@@ -13,6 +13,7 @@ export const SHAPE_TYPES = [
   "cylinder",
   "pyramid",
   "cone",
+  "polygon",
 ] as const;
 export type ShapeType = (typeof SHAPE_TYPES)[number];
 
@@ -22,6 +23,7 @@ export const SHAPE_TYPE_GPU: Record<ShapeType, number> = {
   cylinder: 2,
   pyramid: 3,
   cone: 4,
+  polygon: 5,
 };
 
 export const TRANSFER_MODES = [
