@@ -688,6 +688,8 @@ export function setupPointer(
     const { px, py } = cssRectToDevicePixels(clientX, clientY, 0, 0, canvas);
     renderer.pickWorldPos(px, py).then((result) => {
       if (result && result.shapeId) {
+        // Don't reset edit mode if shape is already selected
+        if (sceneState.editMode === "edit" && sceneState.selectedShapeIds.includes(result.shapeId)) return;
         if (shift) {
           toggleShapeSelection(result.shapeId);
         } else {
