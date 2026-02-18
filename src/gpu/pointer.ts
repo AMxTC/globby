@@ -470,7 +470,6 @@ export function setupPointer(
     if (phase === "idle") {
       e.preventDefault();
       e.stopImmediatePropagation();
-      canvas.setPointerCapture(e.pointerId);
 
       // Compute floor hit eagerly (event coords won't survive async)
       const floorHit = getFloorPoint(e, canvas, camera);
@@ -497,7 +496,6 @@ export function setupPointer(
           } else {
             // No shape hit — use floor plane
             if (!floorHit) {
-              canvas.releasePointerCapture(e.pointerId);
               return;
             }
             point = floorHit;
@@ -513,7 +511,6 @@ export function setupPointer(
       } else {
         // No renderer yet — just use floor
         if (!floorHit) {
-          canvas.releasePointerCapture(e.pointerId);
           return;
         }
         if (tool === "sphere") {
@@ -602,7 +599,7 @@ export function setupPointer(
       const floorY = sceneState.drag.baseFloorY;
       const point = getPlanePoint(e, canvas, camera, floorY);
       if (!point) return;
-      e.stopImmediatePropagation();
+      if (e.buttons & 1) e.stopImmediatePropagation();
       updateBase(point);
 
       const tool = sceneState.activeTool;
@@ -623,14 +620,14 @@ export function setupPointer(
         }
       }
     } else if (phase === "height") {
-      e.stopImmediatePropagation();
+      if (e.buttons & 1) e.stopImmediatePropagation();
       const worldY = getHeightFromRay(e, canvas, camera, extrudeCornerX, extrudeCornerZ);
       updateHeight(worldY);
     } else if (phase === "radius") {
       const floorY = sceneState.drag.baseFloorY;
       const point = getPlanePoint(e, canvas, camera, floorY);
       if (!point) return;
-      e.stopImmediatePropagation();
+      if (e.buttons & 1) e.stopImmediatePropagation();
       updateRadius(point);
     }
   }
@@ -790,10 +787,8 @@ export function setupPointer(
     const { phase } = sceneState.drag;
 
     if (phase === "base") {
-      canvas.releasePointerCapture(e.pointerId);
       lockBase();
     } else if (phase === "radius") {
-      canvas.releasePointerCapture(e.pointerId);
       commitRadius();
     }
   }
