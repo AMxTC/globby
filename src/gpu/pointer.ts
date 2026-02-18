@@ -2,17 +2,18 @@ import { Raycaster, Vector2, Vector3, Plane, Matrix4, type PerspectiveCamera } f
 
 const _vpMat = new Matrix4();
 import {
-  sceneState, sceneRefs, isShapeTool, pushUndo,
+  sceneState, sceneRefs, isShapeTool, pushUndo, undo,
   startDrag, updateBase, lockBase,
   updateHeight, commitHeight,
   startRadiusDrag, updateRadius, commitRadius,
   selectShape, toggleShapeSelection, enterEditMode, exitEditMode,
   scaleShape, editPolyVertices,
   addPenVertex, closePen,
+  duplicateSelectedShapes,
   type Vec3,
 } from "../state/sceneStore";
 import type { GPURenderer } from "./renderer";
-import { worldAABBToScreenRect, eulerToMatrix3, projectRayOnAxisDir, worldToScreen } from "../lib/math3d";
+import { worldAABBToScreenRect, eulerToMatrix3, projectRayOnAxisDir, projectRayOnPlane, worldToScreen } from "../lib/math3d";
 import { computeFaceDrag, detectFace, type FaceDragParams } from "../lib/editFace";
 
 /** Intersect two 2D lines (p0+t*d0) and (p1+s*d1). Returns the intersection point,
@@ -187,6 +188,15 @@ export function setupPointer(
   let extrudeCornerZ = 0;
   let marqueeStart: { x: number; y: number; pointerId: number; shiftKey: boolean } | null = null;
   let pushPullDrag: PushPullDrag | null = null;
+  // Shape drag state (click+drag selected shape to move in camera plane)
+  let selectPickResult: { shapeId: string | null } | null = null; // async pick result from pointerdown
+  let shapeDrag: {
+    shapeIds: string[];
+    startPositions: Vec3[];
+    planeNormal: Vec3;
+    planeOrigin: Vec3;
+    startHit: Vec3;
+  } | null = null;
   const PEN_CLOSE_PX = 20; // screen-pixel distance to first vertex to close
 
   function isNearFirstVertex(clickX: number, clickY: number): boolean {
@@ -221,6 +231,17 @@ export function setupPointer(
 
       marqueeStart = { x: e.clientX, y: e.clientY, pointerId: e.pointerId, shiftKey: e.shiftKey };
       canvas.setPointerCapture(e.pointerId);
+
+      // Fire async GPU pick so we know if the click hit a selected shape (for drag-move)
+      selectPickResult = null;
+      const renderer = getRenderer();
+      if (renderer) {
+        const { px, py } = cssRectToDevicePixels(e.clientX, e.clientY, 0, 0, canvas);
+        renderer.pickWorldPos(px, py).then((result) => {
+          if (!marqueeStart) return; // already committed/cancelled
+          selectPickResult = { shapeId: result?.shapeId ?? null };
+        });
+      }
       return;
     }
 
@@ -571,11 +592,90 @@ export function setupPointer(
       return;
     }
 
+    // --- Shape drag (move selected shapes in camera plane) ---
+    if (shapeDrag) {
+      e.stopImmediatePropagation();
+      const hit = projectRayOnPlane(camera, canvas, e.clientX, e.clientY, shapeDrag.planeOrigin, shapeDrag.planeNormal);
+      if (!hit) return;
+      const dx = hit[0] - shapeDrag.startHit[0];
+      const dy = hit[1] - shapeDrag.startHit[1];
+      const dz = hit[2] - shapeDrag.startHit[2];
+      for (let i = 0; i < shapeDrag.shapeIds.length; i++) {
+        const s = sceneState.shapes.find((sh) => sh.id === shapeDrag!.shapeIds[i]);
+        if (!s) continue;
+        const sp = shapeDrag.startPositions[i];
+        s.position = [sp[0] + dx, sp[1] + dy, sp[2] + dz];
+      }
+      sceneState.version++;
+      return;
+    }
+
     // --- Marquee drag ---
     if (marqueeStart) {
       const dx = e.clientX - marqueeStart.x;
       const dy = e.clientY - marqueeStart.y;
       if (!sceneState.marquee && Math.sqrt(dx * dx + dy * dy) > MARQUEE_THRESHOLD) {
+        // Check if we clicked any shape → select it (if needed) and start shape drag
+        if (selectPickResult?.shapeId) {
+          const hitId = selectPickResult.shapeId;
+          const alreadySelected = sceneState.selectedShapeIds.includes(hitId);
+
+          // Push undo before selection change so both selection + move are one undo step
+          if (!alreadySelected) {
+            pushUndo();
+            if (marqueeStart.shiftKey) {
+              toggleShapeSelection(hitId);
+            } else {
+              selectShape(hitId);
+            }
+          }
+
+          // Compute camera-plane through centroid of selected shapes
+          camera.updateMatrixWorld();
+          const fwd: Vec3 = [
+            -camera.matrixWorld.elements[8],
+            -camera.matrixWorld.elements[9],
+            -camera.matrixWorld.elements[10],
+          ];
+          const ids = [...sceneState.selectedShapeIds];
+          const startPositions: Vec3[] = [];
+          let cx = 0, cy = 0, cz = 0;
+          for (const id of ids) {
+            const s = sceneState.shapes.find((sh) => sh.id === id);
+            if (!s) continue;
+            startPositions.push([...s.position] as Vec3);
+            cx += s.position[0]; cy += s.position[1]; cz += s.position[2];
+          }
+          const n = startPositions.length || 1;
+          const planeOrigin: Vec3 = [cx / n, cy / n, cz / n];
+          // Project start mouse position onto this plane
+          const startHit = projectRayOnPlane(camera, canvas, marqueeStart.x, marqueeStart.y, planeOrigin, fwd);
+          if (startHit) {
+            e.stopImmediatePropagation();
+            if (sceneRefs.controls) sceneRefs.controls.enabled = false;
+
+            // Alt+drag: duplicate shapes first, then drag the copies
+            if (e.altKey) {
+              if (alreadySelected) pushUndo(); // undo before duplicateSelectedShapes snapshots
+              const newIds = duplicateSelectedShapes(); // pushes undo internally
+              const dupPositions: Vec3[] = [];
+              for (const nid of newIds) {
+                const s = sceneState.shapes.find((sh) => sh.id === nid);
+                if (s) dupPositions.push([...s.position] as Vec3);
+              }
+              shapeDrag = { shapeIds: newIds, startPositions: dupPositions, planeNormal: fwd, planeOrigin, startHit };
+            } else {
+              // Undo already pushed above if we changed selection; push now if we didn't
+              if (alreadySelected) pushUndo();
+              shapeDrag = { shapeIds: ids, startPositions, planeNormal: fwd, planeOrigin, startHit };
+            }
+
+            marqueeStart = null;
+            selectPickResult = null;
+            return;
+          }
+        }
+        // Otherwise start marquee
         sceneState.marquee = {
           x1: marqueeStart.x,
           y1: marqueeStart.y,
@@ -752,6 +852,27 @@ export function setupPointer(
       return;
     }
 
+    // --- Shape drag commit ---
+    if (shapeDrag) {
+      canvas.releasePointerCapture(e.pointerId);
+      if (sceneRefs.controls) sceneRefs.controls.enabled = true;
+      // Check if anything actually moved — if not, undo the no-op snapshot
+      let moved = false;
+      for (let i = 0; i < shapeDrag.shapeIds.length; i++) {
+        const s = sceneState.shapes.find((sh) => sh.id === shapeDrag!.shapeIds[i]);
+        if (!s) continue;
+        const sp = shapeDrag.startPositions[i];
+        if (s.position[0] !== sp[0] || s.position[1] !== sp[1] || s.position[2] !== sp[2]) {
+          moved = true;
+          break;
+        }
+      }
+      if (!moved) undo();
+      shapeDrag = null;
+      selectPickResult = null;
+      return;
+    }
+
     // --- Marquee / click select ---
     if (marqueeStart) {
       const marqueeRect = sceneState.marquee
@@ -761,6 +882,7 @@ export function setupPointer(
       const isSelectTool = sceneState.activeTool === "select";
       canvas.releasePointerCapture(marqueeStart.pointerId);
       marqueeStart = null;
+      selectPickResult = null;
       sceneState.marquee = null;
 
       // Tool switched mid-drag (e.g. hotkey) — just clean up
