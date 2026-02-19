@@ -350,7 +350,7 @@ function expandSection(
 
 export default function SidePanel() {
   const snap = useSnapshot(sceneState);
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(() => localStorage.getItem("sidepanel") !== "closed");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [showLayerFx, setShowLayerFx] = useState(false);
@@ -428,7 +428,7 @@ export default function SidePanel() {
         <Button
           variant="outline"
           size="icon"
-          onClick={() => setOpen(true)}
+          onClick={() => { setOpen(true); localStorage.setItem("sidepanel", "open"); }}
           title="Show Layers"
           className="bg-accent border-border text-muted-foreground"
         >
@@ -456,7 +456,7 @@ export default function SidePanel() {
             className="h-7 w-7 text-muted-foreground hover:text-foreground"
             onClick={(e) => {
               e.stopPropagation();
-              setOpen(false);
+              setOpen(false); localStorage.setItem("sidepanel", "closed");
             }}
             title="Collapse Panel"
           >
