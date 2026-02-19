@@ -13,7 +13,6 @@ import { subscribe } from "valtio";
 import { sceneState, isShapeTool } from "../state/sceneStore";
 import crosshairSvg from "../assets/cursors/crosshair.svg?raw";
 import orbitSvg from "../assets/cursors/orbit.svg?raw";
-import pushPull from "../assets/cursors/pushpull.svg?raw";
 import mousePointer from "../assets/cursors/mousePointer.svg?raw";
 
 function svgToDataUri(svg: string): string {
