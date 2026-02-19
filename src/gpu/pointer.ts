@@ -11,10 +11,12 @@ import {
   addPenVertex, closePen,
   duplicateSelectedShapes,
   type Vec3,
+  type SDFShape,
 } from "../state/sceneStore";
 import type { GPURenderer } from "./renderer";
 import { worldAABBToScreenRect, eulerToMatrix3, projectRayOnAxisDir, projectRayOnPlane, worldToScreen } from "../lib/math3d";
-import { computeFaceDrag, detectFace, type FaceDragParams } from "../lib/editFace";
+import { computeFaceDrag, detectFace, type FaceDragParams, type FaceResult } from "../lib/editFace";
+import { setRawCursor, makePushPullArrowCursor, makeHoverArrowCursor } from "../lib/cursors";
 
 /** Intersect two 2D lines (p0+t*d0) and (p1+s*d1). Returns the intersection point,
  *  or null if lines are parallel. */
@@ -61,6 +63,72 @@ function pushPullPolyEdge(
   newVerts[j] = intB ?? pushedB;
 
   return newVerts;
+}
+
+/** Compute the world-space push/pull axis direction for a detected face. */
+function computeAxisDir(
+  face: FaceResult,
+  shape: SDFShape,
+  worldPos: [number, number, number],
+): Vec3 {
+  // Polygon edge: compute edge normal as axis
+  if (face.edgeIdx !== undefined && shape.type === "polygon" && shape.vertices) {
+    const verts = shape.vertices;
+    const count = verts.length;
+    const ei = face.edgeIdx;
+    const v0 = verts[ei];
+    const v1 = verts[(ei + 1) % count];
+    const edx = v1[0] - v0[0];
+    const edz = v1[1] - v0[1];
+    let nx = edz, nz = -edx;
+    const nLen = Math.sqrt(nx * nx + nz * nz);
+    if (nLen > 1e-12) { nx /= nLen; nz /= nLen; }
+    const mx = (v0[0] + v1[0]) * 0.5;
+    const mz = (v0[1] + v1[1]) * 0.5;
+    if (nx * mx + nz * mz < 0) { nx = -nx; nz = -nz; }
+    const m = eulerToMatrix3(shape.rotation[0], shape.rotation[1], shape.rotation[2]);
+    return [
+      m[0] * nx + m[6] * nz,
+      m[1] * nx + m[7] * nz,
+      m[2] * nx + m[8] * nz,
+    ];
+  }
+
+  if (shape.type === "sphere") {
+    const dx = worldPos[0] - shape.position[0];
+    const dy = worldPos[1] - shape.position[1];
+    const dz = worldPos[2] - shape.position[2];
+    const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    return len > 1e-6 ? [dx / len, dy / len, dz / len] : [1, 0, 0];
+  }
+
+  if (
+    (shape.type === "cylinder" || shape.type === "cone" || shape.type === "pyramid") &&
+    face.axis !== "y"
+  ) {
+    const m = eulerToMatrix3(shape.rotation[0], shape.rotation[1], shape.rotation[2]);
+    const dx = worldPos[0] - shape.position[0];
+    const dy = worldPos[1] - shape.position[1];
+    const dz = worldPos[2] - shape.position[2];
+    const lx = m[0] * dx + m[1] * dy + m[2] * dz;
+    const lz = m[6] * dx + m[7] * dy + m[8] * dz;
+    const rLen = Math.sqrt(lx * lx + lz * lz);
+    const nx = rLen > 1e-6 ? lx / rLen : 1;
+    const nz = rLen > 1e-6 ? lz / rLen : 0;
+    return [
+      m[0] * nx + m[6] * nz,
+      m[1] * nx + m[7] * nz,
+      m[2] * nx + m[8] * nz,
+    ];
+  }
+
+  // Box faces & cap faces: use the local axis from rotation matrix
+  const m = eulerToMatrix3(shape.rotation[0], shape.rotation[1], shape.rotation[2]);
+  return [
+    m[face.axisIdx * 3 + 0],
+    m[face.axisIdx * 3 + 1],
+    m[face.axisIdx * 3 + 2],
+  ];
 }
 
 const FLOOR_Y = 0;
@@ -199,6 +267,70 @@ export function setupPointer(
   } | null = null;
   const PEN_CLOSE_PX = 20; // screen-pixel distance to first vertex to close
 
+  // Serialises all GPU picks (hover + click) through a single promise chain
+  // so only one mapAsync is in-flight at a time.
+  let pickChain: Promise<void> = Promise.resolve();
+  let hoverPickQueued = false;
+  const HOVER_PICK_INTERVAL = 50; // ms throttle for hover GPU picks
+  let lastHoverPickTime = 0;
+
+  function updateHoverCursor(e: PointerEvent) {
+    if (pushPullDrag || hoverPickQueued) return;
+    const now = performance.now();
+    if (now - lastHoverPickTime < HOVER_PICK_INTERVAL) return;
+    lastHoverPickTime = now;
+
+    const renderer = getRenderer();
+    if (!renderer) return;
+
+    const dpr = window.devicePixelRatio;
+    const rect = canvas.getBoundingClientRect();
+    const pixelX = (e.clientX - rect.left) * dpr;
+    const pixelY = (e.clientY - rect.top) * dpr;
+
+    hoverPickQueued = true;
+    pickChain = pickChain.then(() => {
+      hoverPickQueued = false;
+      // Bail if drag started or tool changed while queued
+      if (pushPullDrag || sceneState.activeTool !== "pushpull") return;
+      return renderer.pickWorldPos(pixelX, pixelY).then((result) => {
+        if (pushPullDrag || sceneState.activeTool !== "pushpull") return;
+
+        if (!result || !result.shapeId) {
+          setRawCursor(null);
+          return;
+        }
+        const shape = sceneState.shapes.find((s) => s.id === result.shapeId);
+        if (!shape) { setRawCursor(null); return; }
+
+        const face = detectFace(result.worldPos as Vec3, shape);
+        if (!face) { setRawCursor(null); return; }
+
+        const axisDir = computeAxisDir(face, shape, result.worldPos);
+        setRawCursor(makeHoverArrowCursor(cursorAngle(shape.position, axisDir, face.negative)));
+      });
+    }).catch(() => {});
+  }
+
+  function axisDirToScreenAngle(shapePos: Vec3, axisDir: Vec3): number {
+    camera.updateMatrixWorld();
+    _vpMat.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    const cw = canvas.clientWidth;
+    const ch = canvas.clientHeight;
+    const [sx0, sy0] = worldToScreen(shapePos, _vpMat, cw, ch);
+    const [sx1, sy1] = worldToScreen(
+      [shapePos[0] + axisDir[0], shapePos[1] + axisDir[1], shapePos[2] + axisDir[2]],
+      _vpMat, cw, ch,
+    );
+    const dx = sx1 - sx0;
+    const dy = sy1 - sy0;
+    return Math.atan2(dx, -dy) * (180 / Math.PI);
+  }
+
+  function cursorAngle(pos: Vec3, axisDir: Vec3, negative: boolean): number {
+    return axisDirToScreenAngle(pos, axisDir) + (negative ? 180 : 0);
+  }
+
   function isNearFirstVertex(clickX: number, clickY: number): boolean {
     const verts = sceneState.penVertices;
     if (verts.length < 3) return false;
@@ -265,7 +397,7 @@ export function setupPointer(
         return;
       }
 
-      renderer.pickWorldPos(pixelX, pixelY).then((result) => {
+      pickChain = pickChain.then(() => renderer.pickWorldPos(pixelX, pixelY)).then((result) => {
         // Stale check: tool changed or drag already started while awaiting pick
         if (sceneState.activeTool !== "pushpull" || pushPullDrag) {
           canvas.releasePointerCapture(e.pointerId);
@@ -289,7 +421,9 @@ export function setupPointer(
           return;
         }
 
-        // Polygon edge push/pull: compute edge normal as axis
+        const axisDir = computeAxisDir(face, shape, result.worldPos);
+
+        // Polygon edge push/pull: extra state for edge constraint
         if (face.edgeIdx !== undefined && shape.type === "polygon" && shape.vertices) {
           const verts = shape.vertices;
           const count = verts.length;
@@ -298,23 +432,12 @@ export function setupPointer(
           const v1 = verts[(ei + 1) % count];
           const edx = v1[0] - v0[0];
           const edz = v1[1] - v0[1];
-          // 2D outward normal: perpendicular to edge direction
           let nx = edz, nz = -edx;
           const nLen = Math.sqrt(nx * nx + nz * nz);
           if (nLen > 1e-12) { nx /= nLen; nz /= nLen; }
-          // Ensure outward: dot(normal, midpoint) should be positive
-          // (vertices are centered around centroid = origin in local space)
           const mx = (v0[0] + v1[0]) * 0.5;
           const mz = (v0[1] + v1[1]) * 0.5;
           if (nx * mx + nz * mz < 0) { nx = -nx; nz = -nz; }
-
-          // Transform local [nx, 0, nz] to world via rotation matrix
-          const m = eulerToMatrix3(shape.rotation[0], shape.rotation[1], shape.rotation[2]);
-          const axisDir: Vec3 = [
-            m[0] * nx + m[6] * nz,
-            m[1] * nx + m[7] * nz,
-            m[2] * nx + m[8] * nz,
-          ];
 
           const startT = projectRayOnAxisDir(
             camera, canvas, clientX, clientY,
@@ -336,47 +459,8 @@ export function setupPointer(
             startVertices: verts.map(v => [...v] as [number, number]),
             startBoundingRadius: shape.size[0],
           };
+          setRawCursor(makePushPullArrowCursor(cursorAngle(shape.position, axisDir, face.negative)));
           return;
-        }
-
-        // Compute world-space axis direction (shape-aware)
-        let axisDir: Vec3;
-        if (shape.type === "sphere") {
-          // Radial: center → click point
-          const dx = result.worldPos[0] - shape.position[0];
-          const dy = result.worldPos[1] - shape.position[1];
-          const dz = result.worldPos[2] - shape.position[2];
-          const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
-          axisDir = len > 1e-6 ? [dx / len, dy / len, dz / len] : [1, 0, 0];
-        } else if (
-          (shape.type === "cylinder" || shape.type === "cone" || shape.type === "pyramid") &&
-          face.axis !== "y"
-        ) {
-          // Side face: radial direction in the shape's local XZ plane
-          const m = eulerToMatrix3(shape.rotation[0], shape.rotation[1], shape.rotation[2]);
-          const dx = result.worldPos[0] - shape.position[0];
-          const dy = result.worldPos[1] - shape.position[1];
-          const dz = result.worldPos[2] - shape.position[2];
-          // Project onto local X and Z (transpose = inverse for orthonormal)
-          const lx = m[0] * dx + m[1] * dy + m[2] * dz;
-          const lz = m[6] * dx + m[7] * dy + m[8] * dz;
-          const rLen = Math.sqrt(lx * lx + lz * lz);
-          const nx = rLen > 1e-6 ? lx / rLen : 1;
-          const nz = rLen > 1e-6 ? lz / rLen : 0;
-          // World direction = nx * localXAxis + nz * localZAxis
-          axisDir = [
-            m[0] * nx + m[6] * nz,
-            m[1] * nx + m[7] * nz,
-            m[2] * nx + m[8] * nz,
-          ];
-        } else {
-          // Box faces & cap faces: use the local axis from rotation matrix
-          const m = eulerToMatrix3(shape.rotation[0], shape.rotation[1], shape.rotation[2]);
-          axisDir = [
-            m[face.axisIdx * 3 + 0],
-            m[face.axisIdx * 3 + 1],
-            m[face.axisIdx * 3 + 2],
-          ];
         }
 
         // Project ray onto that axis to get startT
@@ -396,7 +480,8 @@ export function setupPointer(
           startScale: shape.scale,
           axis: face.axis,
         };
-      });
+        setRawCursor(makePushPullArrowCursor(cursorAngle(shape.position, axisDir, face.negative)));
+      }).catch(() => {});
       return;
     }
 
@@ -557,6 +642,11 @@ export function setupPointer(
       }
     } else {
       sceneRefs.penCursorXZ = null;
+    }
+
+    // --- Push/Pull hover cursor ---
+    if (sceneState.activeTool === "pushpull" && !pushPullDrag) {
+      updateHoverCursor(e);
     }
 
     // --- Push/Pull drag ---
@@ -825,6 +915,7 @@ export function setupPointer(
           // Commit via editPolyVertices (pushes undo)
           editPolyVertices(pushPullDrag.shapeId, finalVerts);
 
+          setRawCursor(makeHoverArrowCursor(cursorAngle(shape.position, pushPullDrag.axisDir, pushPullDrag.negative)));
           pushPullDrag = null;
           return;
         }
@@ -847,6 +938,11 @@ export function setupPointer(
         scaleShape(pushPullDrag.shapeId, newSize, newPos);
       }
 
+      const endShape = sceneState.shapes.find((s) => s.id === pushPullDrag!.shapeId);
+      setRawCursor(endShape
+        ? makeHoverArrowCursor(cursorAngle(endShape.position, pushPullDrag!.axisDir, pushPullDrag!.negative))
+        : null,
+      );
       pushPullDrag = null;
       return;
     }
