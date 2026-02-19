@@ -24,6 +24,11 @@ export class ChunkManager {
   private chunkMapData: Int32Array;
   private dirtyChunks: ChunkSlot[] = [];
 
+  // Per-shape chunk coverage + data fingerprint from last sync
+  private shapeChunkCache = new Map<string, Set<string>>();
+  private shapeFingerprints = new Map<string, string>();
+  private forceFullRebake = false;
+
   // Cached world bounds of all allocated chunks
   worldBoundsMin: [number, number, number] = [0, 0, 0];
   worldBoundsMax: [number, number, number] = [0, 0, 0];
@@ -109,6 +114,15 @@ export class ChunkManager {
     }
   }
 
+  /** Quick fingerprint of shape data that affects SDF output */
+  private static shapeFingerprint(s: SDFShape): string {
+    let fp = `${s.position[0]},${s.position[1]},${s.position[2]},${s.rotation[0]},${s.rotation[1]},${s.rotation[2]},${s.size[0]},${s.size[1]},${s.size[2]},${s.scale},${s.type},${s.capped},${s.wallThickness},${s.fxParams}`;
+    if (s.vertices) {
+      for (const v of s.vertices) fp += `,${v[0]},${v[1]}`;
+    }
+    return fp;
+  }
+
   /** Returns chunks that overlap a shape's AABB (with margin) */
   private shapeChunks(shape: SDFShape): Set<string> {
     const keys = new Set<string>();
@@ -135,15 +149,22 @@ export class ChunkManager {
   /**
    * Sync chunks with current shapes.
    * Returns dirty chunks that need rebaking and the chunk map data.
+   *
+   * Incremental: only marks chunks dirty if a shape's AABB coverage or
+   * transform changed (shape moved/resized/added/removed). Chunks whose
+   * shapes are all unchanged are skipped — their baked SDF is still valid.
    */
   sync(shapes: readonly SDFShape[]): {
     dirtyChunks: ChunkSlot[];
     chunkMapData: Int32Array;
   } {
-    // Compute needed chunks from all shape AABBs
+    // Compute per-shape chunk keys and union of all needed chunks
     const needed = new Set<string>();
+    const newShapeChunks = new Map<string, Set<string>>();
     for (const shape of shapes) {
-      for (const key of this.shapeChunks(shape)) {
+      const keys = this.shapeChunks(shape);
+      newShapeChunks.set(shape.id, keys);
+      for (const key of keys) {
         needed.add(key);
       }
     }
@@ -155,8 +176,46 @@ export class ChunkManager {
       }
     }
 
-    // Allocate new chunks and mark all needed as dirty
-    // (We rebake all chunks since shapes may have changed globally)
+    // Determine which chunk keys are dirty via per-shape diff
+    const dirtyKeys = new Set<string>();
+    const newFingerprints = new Map<string, string>();
+
+    if (this.forceFullRebake) {
+      for (const key of needed) dirtyKeys.add(key);
+      this.forceFullRebake = false;
+    } else {
+      for (const shape of shapes) {
+        const id = shape.id;
+        const newKeys = newShapeChunks.get(id)!;
+        const fp = ChunkManager.shapeFingerprint(shape);
+        newFingerprints.set(id, fp);
+
+        const oldKeys = this.shapeChunkCache.get(id);
+        const oldFp = this.shapeFingerprints.get(id);
+
+        if (!oldKeys) {
+          // New shape — dirty all its chunks
+          for (const k of newKeys) dirtyKeys.add(k);
+        } else if (fp !== oldFp) {
+          // Shape changed — dirty old and new chunks
+          for (const k of oldKeys) dirtyKeys.add(k);
+          for (const k of newKeys) dirtyKeys.add(k);
+        }
+        // Else: shape unchanged, no chunks dirtied
+      }
+      // Shapes that were removed — dirty their old chunks
+      for (const [shapeId, oldKeys] of this.shapeChunkCache) {
+        if (!newShapeChunks.has(shapeId)) {
+          for (const k of oldKeys) dirtyKeys.add(k);
+        }
+      }
+    }
+
+    // Update caches
+    this.shapeChunkCache = newShapeChunks;
+    this.shapeFingerprints = newFingerprints;
+
+    // Allocate new chunks and collect dirty ones
     this.dirtyChunks = [];
     for (const key of needed) {
       let slot = this.chunks.get(key);
@@ -165,7 +224,9 @@ export class ChunkManager {
         slot = this.allocate(cx, cy, cz);
         if (!slot) continue; // out of slots
       }
-      this.dirtyChunks.push(slot);
+      if (dirtyKeys.has(key)) {
+        this.dirtyChunks.push(slot);
+      }
     }
 
     // Update world bounds
@@ -225,8 +286,8 @@ export class ChunkManager {
     return TOTAL_SLOTS;
   }
 
-  /** Mark all allocated chunks as dirty so they get rebaked */
+  /** Mark all allocated chunks as dirty so they get rebaked on next sync */
   markAllDirty(): void {
-    this.dirtyChunks = [...this.chunks.values()];
+    this.forceFullRebake = true;
   }
 }

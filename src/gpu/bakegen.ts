@@ -12,7 +12,14 @@ const headerEnd = bakeWgsl.indexOf(HEADER_MARKER);
 const STATIC_HEADER = headerEnd >= 0 ? bakeWgsl.slice(0, headerEnd) : bakeWgsl;
 
 function generateShapeEval(shapeVar: string): string {
-  return `    let translated_p = world_pos - shapes[${shapeVar}].position;
+  return `    // Cheap bounding-sphere skip
+    let to_shape = world_pos - shapes[${shapeVar}].position;
+    let center_dist = length(to_shape);
+    let bound_r = length(shapes[${shapeVar}].size) * shapes[${shapeVar}].scale;
+    let lower_bound = center_dist - bound_r;
+    if (lower_bound > max(abs(d), 0.25)) { continue; }
+
+    let translated_p = to_shape;
     let inv_rot = buildInvRotation(shapes[${shapeVar}].rotation);
     let s = shapes[${shapeVar}].scale;
     let local_p = (inv_rot * translated_p) / s;

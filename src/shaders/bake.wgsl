@@ -193,7 +193,15 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   var closest_raw: f32 = 1e10;
   var closest_id: u32 = 0xFFFFFFFFu;
   for (var i: u32 = 0u; i < params.shape_count; i = i + 1u) {
-    let translated_p = world_pos - shapes[i].position;
+    // Cheap bounding-sphere skip: if point is far from shape, skip expensive SDF eval
+    let to_shape = world_pos - shapes[i].position;
+    let center_dist = length(to_shape);
+    let bound_r = length(shapes[i].size) * shapes[i].scale;
+    let lower_bound = center_dist - bound_r;
+    // Skip if lower bound exceeds both current d and a margin for smooth ops
+    if (lower_bound > max(abs(d), 0.25)) { continue; }
+
+    let translated_p = to_shape;
     let inv_rot = buildInvRotation(shapes[i].rotation);
     let s = shapes[i].scale;
     let local_p = (inv_rot * translated_p) / s;

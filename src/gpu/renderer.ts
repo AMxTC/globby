@@ -140,6 +140,7 @@ export class GPURenderer {
   private lastBakeShaderCode = '';
   private pipelineGeneration = 0;
   private fallbackPipeline!: GPUComputePipeline; // flat NO_FX pipeline, always valid
+  private lastLayerFingerprint = '';
 
   // Pre-allocated typed arrays to avoid per-frame allocations
   private readonly uniformData = new ArrayBuffer(UNIFORM_SIZE);
@@ -651,6 +652,13 @@ export class GPURenderer {
     for (const l of layers) {
       layerInfo.set(l.id, { mode: l.transferMode as TransferMode, opacity: l.opacity, param: l.transferParam, fxParams: l.fxParams ?? [0, 0, 0] });
       if (!l.visible) hiddenLayers.add(l.id);
+    }
+
+    // If layer config changed, force full rebake (affects all shapes' packed transfer data)
+    const layerFp = layers.map(l => `${l.id},${l.transferMode},${l.opacity},${l.transferParam},${l.visible},${l.fx},${l.fxParams}`).join('|');
+    if (layerFp !== this.lastLayerFingerprint) {
+      this.lastLayerFingerprint = layerFp;
+      this.chunkManager.markAllDirty();
     }
 
     const sorted = [...shapes].filter((s) => !hiddenLayers.has(s.layerId)).sort((a, b) => {
