@@ -27,15 +27,51 @@ const mousePointerInverted = mousePointer
 
 export type CursorName = keyof typeof CURSORS;
 
+function scaledCursor(
+  svg: string,
+  size: number,
+  hotspot: [number, number],
+  fallback = "default",
+  shadow?: {
+    dx?: number;
+    dy?: number;
+    blur?: number;
+    color?: string;
+    opacity?: number;
+  },
+): string {
+  let scaled = svg
+    .replace(/\bwidth="[\d.]+"/, `width="${size}"`)
+    .replace(/\bheight="[\d.]+"/, `height="${size}"`);
+  if (shadow) {
+    const { dx = 1, dy = 1, blur = 2, color = "black", opacity = 0.4 } = shadow;
+    const filter = `<defs><filter id="ds" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="${dx}" dy="${dy}" stdDeviation="${blur}" flood-color="${color}" flood-opacity="${opacity}"/></filter></defs>`;
+    const groupWrap = (inner: string) =>
+      inner
+        .replace(/(<svg[^>]*>)/, `$1${filter}<g filter="url(#ds)">`)
+        .replace(/<\/svg>/, "</g></svg>");
+    scaled = groupWrap(scaled);
+  }
+  return `${svgToDataUri(scaled)} ${hotspot[0]} ${hotspot[1]}, ${fallback}`;
+}
+
+const SHADOW = { dx: 1, dy: 1, blur: 2, color: "black", opacity: 0.4 };
+
 export const CURSORS = {
   default: "default",
   crosshair: `${svgToDataUri(crosshairSvg)} 12 12, crosshair`,
   grab: "grab",
   grabbing: "grabbing",
-  orbit: `${svgToDataUri(orbitSvg)} 12 12, default`,
-  pushpull: `${svgToDataUri(pushPull)} 12 12, default`,
-  mousePointer: `${svgToDataUri(mousePointer)} 1 1, default`,
-  mousePointerInverted: `${svgToDataUri(mousePointerInverted)} 1 1, default`,
+  orbit: scaledCursor(orbitSvg, 22, [12, 12], "grab", SHADOW),
+  pushpull: scaledCursor(pushPull, 22, [12, 12], "default", SHADOW),
+  mousePointer: scaledCursor(mousePointer, 24, [1, 1], "crosshair", SHADOW),
+  mousePointerInverted: scaledCursor(
+    mousePointerInverted,
+    24,
+    [1, 1],
+    "crosshair",
+    SHADOW,
+  ),
 } as const;
 
 let currentCanvas: HTMLCanvasElement | null = null;

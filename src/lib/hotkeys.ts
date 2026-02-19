@@ -51,7 +51,7 @@ function isInputFocused(e: KeyboardEvent): boolean {
   const tag = el.tagName;
   if (tag === "INPUT" || tag === "TEXTAREA") return true;
   // Monaco editor uses contentEditable divs and nested textareas
-  if (el.closest('.monaco-editor')) return true;
+  if (el.closest(".monaco-editor")) return true;
   return false;
 }
 
@@ -81,7 +81,10 @@ const HOTKEYS: HotkeyDef[] = [
     description: "Delete selected shapes or vertex",
     combo: { key: "Backspace" },
     action: () => {
-      if (sceneState.editMode === "edit" && sceneRefs.selectedPolyVertIdx !== null) {
+      if (
+        sceneState.editMode === "edit" &&
+        sceneRefs.selectedPolyVertIdx !== null
+      ) {
         const shapeId = sceneState.selectedShapeIds[0];
         if (shapeId) deletePolyVertex(shapeId, sceneRefs.selectedPolyVertIdx);
         return;
@@ -94,7 +97,10 @@ const HOTKEYS: HotkeyDef[] = [
     description: "Delete selected shapes or vertex",
     combo: { key: "Delete" },
     action: () => {
-      if (sceneState.editMode === "edit" && sceneRefs.selectedPolyVertIdx !== null) {
+      if (
+        sceneState.editMode === "edit" &&
+        sceneRefs.selectedPolyVertIdx !== null
+      ) {
         const shapeId = sceneState.selectedShapeIds[0];
         if (shapeId) deletePolyVertex(shapeId, sceneRefs.selectedPolyVertIdx);
         return;
@@ -112,6 +118,8 @@ const HOTKEYS: HotkeyDef[] = [
       } else if (sceneState.drag.phase !== "idle") {
         cancelDrag();
       } else if (isShapeTool(sceneState.activeTool)) {
+        setTool("select");
+      } else if (sceneState.activeTool !== "select") {
         setTool("select");
       } else {
         selectShape(null);
@@ -149,8 +157,10 @@ const HOTKEYS: HotkeyDef[] = [
           size: [...shape.size] as Vec3,
           scale: shape.scale,
           fx: shape.fx,
-          fxParams: shape.fxParams ? [...shape.fxParams] as Vec3 : undefined,
-          vertices: shape.vertices ? shape.vertices.map(v => [...v] as [number, number]) : undefined,
+          fxParams: shape.fxParams ? ([...shape.fxParams] as Vec3) : undefined,
+          vertices: shape.vertices
+            ? shape.vertices.map((v) => [...v] as [number, number])
+            : undefined,
           capped: shape.capped,
           wallThickness: shape.wallThickness,
         });
@@ -170,8 +180,10 @@ const HOTKEYS: HotkeyDef[] = [
           position: [...item.position] as Vec3,
           rotation: [...item.rotation] as Vec3,
           size: [...item.size] as Vec3,
-          vertices: item.vertices ? item.vertices.map(v => [...v] as [number, number]) : undefined,
-          fxParams: item.fxParams ? [...item.fxParams] as Vec3 : undefined,
+          vertices: item.vertices
+            ? item.vertices.map((v) => [...v] as [number, number])
+            : undefined,
+          fxParams: item.fxParams ? ([...item.fxParams] as Vec3) : undefined,
         });
         const last = sceneState.shapes[sceneState.shapes.length - 1];
         if (last) newIds.push(last.id);
@@ -197,8 +209,10 @@ const HOTKEYS: HotkeyDef[] = [
           size: [...shape.size] as Vec3,
           scale: shape.scale,
           fx: shape.fx,
-          fxParams: shape.fxParams ? [...shape.fxParams] as Vec3 : undefined,
-          vertices: shape.vertices ? shape.vertices.map(v => [...v] as [number, number]) : undefined,
+          fxParams: shape.fxParams ? ([...shape.fxParams] as Vec3) : undefined,
+          vertices: shape.vertices
+            ? shape.vertices.map((v) => [...v] as [number, number])
+            : undefined,
           capped: shape.capped,
           wallThickness: shape.wallThickness,
         });
@@ -227,7 +241,9 @@ const HOTKEYS: HotkeyDef[] = [
       if (!controls) return;
 
       // Compute centroid of all selected shapes
-      let cx = 0, cy = 0, cz = 0;
+      let cx = 0,
+        cy = 0,
+        cz = 0;
       let count = 0;
       for (const id of ids) {
         const shape = sceneState.shapes.find((s) => s.id === id);
@@ -238,7 +254,9 @@ const HOTKEYS: HotkeyDef[] = [
         count++;
       }
       if (count === 0) return;
-      cx /= count; cy /= count; cz /= count;
+      cx /= count;
+      cy /= count;
+      cz /= count;
 
       const camera = controls.object;
       const delta = new THREE.Vector3(cx, cy, cz).sub(controls.target);
