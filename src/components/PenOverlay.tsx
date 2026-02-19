@@ -5,6 +5,7 @@ import {
   sceneRefs,
   editPolyVertices,
   insertPolyVertex,
+  recenterPolyBounds,
 } from "../state/sceneStore";
 import {
   worldToScreen,
@@ -334,31 +335,7 @@ export default function PenOverlay() {
       const localZ = (m[6] * dx + m[7] * dy + m[8] * dz) / s;
 
       shape.vertices[idx] = [localX, localZ];
-
-      // Recenter vertices around bbox center so AABB stays tight
-      let minVX = Infinity, maxVX = -Infinity, minVZ = Infinity, maxVZ = -Infinity;
-      for (const [vx, vz] of shape.vertices) {
-        if (vx < minVX) minVX = vx; if (vx > maxVX) maxVX = vx;
-        if (vz < minVZ) minVZ = vz; if (vz > maxVZ) maxVZ = vz;
-      }
-      const cvx = (minVX + maxVX) / 2;
-      const cvz = (minVZ + maxVZ) / 2;
-      if (Math.abs(cvx) > 1e-6 || Math.abs(cvz) > 1e-6) {
-        for (let vi = 0; vi < shape.vertices.length; vi++) {
-          shape.vertices[vi] = [shape.vertices[vi][0] - cvx, shape.vertices[vi][1] - cvz];
-        }
-        shape.position = [
-          shape.position[0] + (m[0] * cvx + m[6] * cvz) * s,
-          shape.position[1] + (m[1] * cvx + m[7] * cvz) * s,
-          shape.position[2] + (m[2] * cvx + m[8] * cvz) * s,
-        ];
-      }
-
-      // Recompute bounding radius
-      let maxR = 0;
-      for (const [vx, vz] of shape.vertices)
-        maxR = Math.max(maxR, Math.sqrt(vx * vx + vz * vz));
-      shape.size = [maxR, shape.size[1], shape.size[2]];
+      recenterPolyBounds(shape);
       sceneState.version++;
     }
 

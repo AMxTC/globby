@@ -734,10 +734,7 @@ export function editPolyVertices(shapeId: string, newVerts: [number, number][]) 
   const shape = sceneState.shapes.find(s => s.id === shapeId);
   if (!shape) return;
   shape.vertices = newVerts.map(v => [...v] as [number, number]);
-  // Recompute bounding radius
-  let maxR = 0;
-  for (const [vx, vz] of newVerts) maxR = Math.max(maxR, Math.sqrt(vx * vx + vz * vz));
-  shape.size = [maxR, shape.size[1], shape.size[2]];
+  recenterPolyBounds(shape);
   sceneState.version++;
 }
 
@@ -782,44 +779,41 @@ export function setShapeWallThickness(shapeId: string, thickness: number) {
   sceneState.version++;
 }
 
-/** Recenter polygon vertices around their centroid, adjusting position to compensate. */
-export function recenterPolygon(shapeId: string) {
-  const shape = sceneState.shapes.find(s => s.id === shapeId);
-  if (!shape?.vertices || shape.vertices.length < 3) return;
-
-  // Use bounding box center (not centroid) for tightest AABB
-  let minX = Infinity, maxX = -Infinity;
-  let minZ = Infinity, maxZ = -Infinity;
+/** Recenter polygon vertices around their bbox center, adjust position to compensate,
+ *  and recompute bounding radius. Mutates shape in place. Returns true if anything changed. */
+export function recenterPolyBounds(shape: SDFShape): boolean {
+  if (!shape.vertices || shape.vertices.length < 3) return false;
+  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
   for (const [vx, vz] of shape.vertices) {
-    if (vx < minX) minX = vx;
-    if (vx > maxX) maxX = vx;
-    if (vz < minZ) minZ = vz;
-    if (vz > maxZ) maxZ = vz;
+    if (vx < minX) minX = vx; if (vx > maxX) maxX = vx;
+    if (vz < minZ) minZ = vz; if (vz > maxZ) maxZ = vz;
   }
   const cx = (minX + maxX) / 2;
   const cz = (minZ + maxZ) / 2;
-
-  // Skip if already centered
-  if (Math.abs(cx) < 1e-6 && Math.abs(cz) < 1e-6) return;
-
-  pushUndo();
-
-  // Recenter vertices
-  shape.vertices = shape.vertices.map(([vx, vz]) => [vx - cx, vz - cz] as [number, number]);
-
-  // Transform local centroid offset to world space and adjust position
-  const m = eulerToMatrix3(shape.rotation[0], shape.rotation[1], shape.rotation[2]);
-  const s = shape.scale;
-  shape.position = [
-    shape.position[0] + (m[0] * cx + m[6] * cz) * s,
-    shape.position[1] + (m[1] * cx + m[7] * cz) * s,
-    shape.position[2] + (m[2] * cx + m[8] * cz) * s,
-  ];
-
-  // Recompute bounding radius
+  if (Math.abs(cx) > 1e-6 || Math.abs(cz) > 1e-6) {
+    for (let i = 0; i < shape.vertices.length; i++) {
+      shape.vertices[i] = [shape.vertices[i][0] - cx, shape.vertices[i][1] - cz];
+    }
+    const m = eulerToMatrix3(shape.rotation[0], shape.rotation[1], shape.rotation[2]);
+    const s = shape.scale;
+    shape.position = [
+      shape.position[0] + (m[0] * cx + m[6] * cz) * s,
+      shape.position[1] + (m[1] * cx + m[7] * cz) * s,
+      shape.position[2] + (m[2] * cx + m[8] * cz) * s,
+    ];
+  }
   let maxR = 0;
   for (const [vx, vz] of shape.vertices) maxR = Math.max(maxR, Math.sqrt(vx * vx + vz * vz));
   shape.size = [maxR, shape.size[1], shape.size[2]];
+  return true;
+}
+
+/** Recenter polygon vertices (with undo). */
+export function recenterPolygon(shapeId: string) {
+  const shape = sceneState.shapes.find(s => s.id === shapeId);
+  if (!shape?.vertices || shape.vertices.length < 3) return;
+  pushUndo();
+  recenterPolyBounds(shape);
   sceneState.version++;
 }
 

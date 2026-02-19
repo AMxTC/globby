@@ -10,6 +10,7 @@ import {
   selectAll,
   deleteSelectedShapes,
   deletePolyVertex,
+  duplicateSelectedShapes,
   cancelDrag,
   setTool,
   isShapeTool,
@@ -166,7 +167,7 @@ const HOTKEYS: HotkeyDef[] = [
       for (const item of clipboard) {
         addShape({
           ...item,
-          position: [item.position[0] + 0.2, item.position[1], item.position[2] + 0.2] as Vec3,
+          position: [...item.position] as Vec3,
           rotation: [...item.rotation] as Vec3,
           size: [...item.size] as Vec3,
           vertices: item.vertices ? item.vertices.map(v => [...v] as [number, number]) : undefined,
@@ -203,6 +204,15 @@ const HOTKEYS: HotkeyDef[] = [
         });
       }
       deleteSelectedShapes();
+    },
+  },
+  {
+    name: "Duplicate",
+    description: "Duplicate selected shapes in place",
+    combo: { key: "j", meta: true },
+    action: () => {
+      if (sceneState.selectedShapeIds.length === 0) return;
+      duplicateSelectedShapes();
     },
   },
   {

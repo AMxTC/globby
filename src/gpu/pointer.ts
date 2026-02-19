@@ -7,7 +7,7 @@ import {
   updateHeight, commitHeight,
   startRadiusDrag, updateRadius, commitRadius,
   selectShape, toggleShapeSelection, enterEditMode, exitEditMode,
-  scaleShape, editPolyVertices,
+  scaleShape, editPolyVertices, recenterPolyBounds,
   addPenVertex, closePen,
   duplicateSelectedShapes,
   type Vec3,
@@ -577,10 +577,8 @@ export function setupPointer(
         const [nx, nz] = pushPullDrag.edgeNormal2D;
         const newVerts = pushPullPolyEdge(pushPullDrag.startVertices, pushPullDrag.edgeIdx, nx, nz, localDelta);
         shape.vertices = newVerts;
-        // Recompute bounding radius
-        let maxR = 0;
-        for (const [vx, vz] of newVerts) maxR = Math.max(maxR, Math.sqrt(vx * vx + vz * vz));
-        shape.size = [maxR, shape.size[1], shape.size[2]];
+        shape.position = [...pushPullDrag.startPos] as Vec3;
+        recenterPolyBounds(shape);
         sceneState.version++;
         return;
       }
@@ -821,6 +819,7 @@ export function setupPointer(
           // Restore to start state before undo commit
           shape.vertices = pushPullDrag.startVertices.map(v => [...v] as [number, number]);
           shape.size = [pushPullDrag.startBoundingRadius!, shape.size[1], shape.size[2]];
+          shape.position = [...pushPullDrag.startPos] as Vec3;
           sceneState.version++;
 
           // Commit via editPolyVertices (pushes undo)
