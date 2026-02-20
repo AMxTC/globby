@@ -383,15 +383,15 @@ export default function SidePanel() {
       ? snap.shapes.find((s) => s.id === snap.selectedShapeIds[0])
       : null;
 
-  // Initialize section heights from container on first render
+  // Initialize section heights from container once the panel is open
   useEffect(() => {
-    if (initializedRef.current || !containerRef.current) return;
+    if (!open || initializedRef.current || !containerRef.current) return;
     setSectionHeights(
       initSectionHeights(containerRef.current.clientHeight, collapsed),
     );
     initializedRef.current = true;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [open]);
 
   const {
     onPointerDown: dividerPointerDown,
