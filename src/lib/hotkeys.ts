@@ -28,7 +28,7 @@ interface KeyCombo {
   shift?: boolean;
 }
 
-interface HotkeyDef {
+export interface HotkeyDef {
   name: string;
   description: string;
   combo: KeyCombo;
@@ -53,7 +53,7 @@ function isInputFocused(e: KeyboardEvent): boolean {
   return false;
 }
 
-const HOTKEYS: HotkeyDef[] = [
+export const HOTKEYS: HotkeyDef[] = [
   {
     name: "Undo",
     description: "Undo last action",

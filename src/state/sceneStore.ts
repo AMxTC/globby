@@ -1,4 +1,6 @@
-import { proxy } from "valtio";
+import { proxy, subscribe } from "valtio";
+import { subscribeKey } from "valtio/utils";
+import { nanoid } from "nanoid";
 import { SHAPE_TYPES, type ShapeType, type TransferMode } from "../constants";
 import { rotateVecAroundAxis, composeWorldRotation, eulerToMatrix3 } from "../lib/math3d";
 
@@ -44,21 +46,23 @@ export interface DragState {
   previewSize: Vec3;
 }
 
+const defaultLayerId = nanoid();
+
 export const sceneState = proxy({
   shapes: [
     {
-      id: "1",
+      id: nanoid(),
       type: "box",
       position: [0, 0.5, 0] as Vec3,
       rotation: [0, 0, 0] as Vec3,
       size: [0.5, 0.5, 0.5] as Vec3,
       scale: 1,
-      layerId: "1",
+      layerId: defaultLayerId,
     },
   ] as SDFShape[],
   layers: [
     {
-      id: "1",
+      id: defaultLayerId,
       name: "Layer 1",
       transferMode: "union",
       opacity: 1,
@@ -66,7 +70,7 @@ export const sceneState = proxy({
       visible: true,
     },
   ] as Layer[],
-  activeLayerId: "1" as string,
+  activeLayerId: defaultLayerId as string,
   activeTool: "select" as "select" | "pushpull" | ShapeType,
   selectedShapeIds: [] as string[],
   editMode: "object" as "object" | "edit",
@@ -93,9 +97,6 @@ export const sceneState = proxy({
   penFloorY: 0,
   version: 1,
 });
-
-let nextId = 2; // Shape "1" (default cube) already exists
-let nextLayerId = 2; // Layer "1" already exists
 
 // --- Undo/Redo ---
 
@@ -155,15 +156,6 @@ function restore(snap: SceneSnapshot) {
   sceneState.shapes.splice(0, sceneState.shapes.length, ...snap.shapes);
   sceneState.layers.splice(0, sceneState.layers.length, ...snap.layers);
   sceneState.activeLayerId = snap.activeLayerId;
-  // Keep nextId above any restored id
-  for (const s of snap.shapes) {
-    const n = Number(s.id);
-    if (n >= nextId) nextId = n + 1;
-  }
-  for (const l of snap.layers) {
-    const n = Number(l.id);
-    if (n >= nextLayerId) nextLayerId = n + 1;
-  }
   sceneState.selectedShapeIds = [];
   sceneState.version++;
 }
@@ -184,7 +176,7 @@ export function addShape(shape: Omit<SDFShape, "id" | "layerId">) {
   pushUndo();
   const newShape: SDFShape = {
     ...shape,
-    id: String(nextId++),
+    id: nanoid(),
     layerId: sceneState.activeLayerId,
   };
   sceneState.shapes.push(newShape);
@@ -267,10 +259,11 @@ export function cancelPen() {
 
 export function addLayer() {
   pushUndo();
-  const id = String(nextLayerId++);
+  const id = nanoid();
+  const num = sceneState.layers.length + 1;
   sceneState.layers.push({
     id,
-    name: `Layer ${id}`,
+    name: `Layer ${num}`,
     transferMode: "union",
     opacity: 1,
     transferParam: 0.5,
@@ -349,7 +342,7 @@ export function duplicateLayer(id: string) {
   const layer = sceneState.layers.find((l) => l.id === id);
   if (!layer) return;
   pushUndo();
-  const newLayerId = String(nextLayerId++);
+  const newLayerId = nanoid();
   const idx = sceneState.layers.indexOf(layer);
   sceneState.layers.splice(idx + 1, 0, {
     id: newLayerId,
@@ -365,7 +358,7 @@ export function duplicateLayer(id: string) {
   for (const shape of [...sceneState.shapes]) {
     if (shape.layerId !== id) continue;
     sceneState.shapes.push({
-      id: String(nextId++),
+      id: nanoid(),
       type: shape.type,
       position: [...shape.position] as Vec3,
       rotation: [...shape.rotation] as Vec3,
@@ -627,7 +620,7 @@ export function duplicateShape(id: string): string | null {
   const shape = sceneState.shapes.find((s) => s.id === id);
   if (!shape) return null;
   pushUndo();
-  const newId = String(nextId++);
+  const newId = nanoid();
   sceneState.shapes.push({
     id: newId,
     type: shape.type,
@@ -655,7 +648,7 @@ export function duplicateSelectedShapes(): string[] {
   for (const id of ids) {
     const shape = sceneState.shapes.find((s) => s.id === id);
     if (!shape) continue;
-    const newId = String(nextId++);
+    const newId = nanoid();
     sceneState.shapes.push({
       id: newId,
       type: shape.type,
@@ -967,6 +960,100 @@ export const sceneRefs: {
   selectedPolyVertIdx: null,
   pointerConsumed: false,
 };
+
+// --- Auto-save to localStorage ---
+
+const SCENE_STORAGE_KEY = "globby-scene";
+
+// Restore from localStorage on module load
+try {
+  const raw = localStorage.getItem(SCENE_STORAGE_KEY);
+  if (raw) {
+    const saved = JSON.parse(raw) as {
+      shapes: SceneSnapshot["shapes"];
+      layers: SceneSnapshot["layers"];
+      activeLayerId: string;
+      showGroundPlane?: boolean;
+      renderMode?: number;
+    };
+    if (saved.shapes?.length) {
+      sceneState.shapes.splice(0, sceneState.shapes.length, ...saved.shapes);
+      sceneState.layers.splice(0, sceneState.layers.length, ...saved.layers);
+      sceneState.activeLayerId = saved.activeLayerId;
+      if (saved.showGroundPlane !== undefined) sceneState.showGroundPlane = saved.showGroundPlane;
+      if (saved.renderMode !== undefined) sceneState.renderMode = saved.renderMode as 0 | 1 | 2 | 3 | 4;
+      sceneState.version++;
+    }
+  }
+} catch { /* ignore corrupt data */ }
+
+// Debounced save (1s) — only triggers on persistent keys, not transient
+// state like drag, marquee, selectedShapeIds, etc.
+let saveTimer: ReturnType<typeof setTimeout> | null = null;
+function scheduleSave() {
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    try {
+      const data = {
+        shapes: sceneState.shapes.map((s) => ({
+          id: s.id,
+          type: s.type,
+          position: [...s.position],
+          rotation: [...s.rotation],
+          size: [...s.size],
+          scale: s.scale,
+          layerId: s.layerId,
+          fx: s.fx,
+          fxParams: s.fxParams ? [...s.fxParams] : undefined,
+          vertices: s.vertices ? s.vertices.map(v => [...v]) : undefined,
+          capped: s.capped,
+          wallThickness: s.wallThickness,
+        })),
+        layers: sceneState.layers.map((l) => ({ ...l })),
+        activeLayerId: sceneState.activeLayerId,
+        showGroundPlane: sceneState.showGroundPlane,
+        renderMode: sceneState.renderMode,
+      };
+      localStorage.setItem(SCENE_STORAGE_KEY, JSON.stringify(data));
+    } catch { /* quota exceeded etc */ }
+  }, 1000);
+}
+subscribe(sceneState.shapes, scheduleSave);
+subscribe(sceneState.layers, scheduleSave);
+subscribeKey(sceneState, "activeLayerId", scheduleSave);
+subscribeKey(sceneState, "showGroundPlane", scheduleSave);
+subscribeKey(sceneState, "renderMode", scheduleSave);
+
+// --- Reset scene ---
+
+export function resetScene() {
+  localStorage.removeItem(SCENE_STORAGE_KEY);
+  undoStack.length = 0;
+  redoStack.length = 0;
+  const layerId = nanoid();
+  sceneState.shapes.splice(0, sceneState.shapes.length, {
+    id: nanoid(),
+    type: "box",
+    position: [0, 0.5, 0] as Vec3,
+    rotation: [0, 0, 0] as Vec3,
+    size: [0.5, 0.5, 0.5] as Vec3,
+    scale: 1,
+    layerId,
+  });
+  sceneState.layers.splice(0, sceneState.layers.length, {
+    id: layerId,
+    name: "Layer 1",
+    transferMode: "union",
+    opacity: 1,
+    transferParam: 0.5,
+    visible: true,
+  });
+  sceneState.activeLayerId = layerId;
+  sceneState.activeTool = "select";
+  sceneState.selectedShapeIds = [];
+  sceneState.editMode = "object";
+  sceneState.version++;
+}
 
 declare global {
   interface Window {

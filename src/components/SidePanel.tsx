@@ -13,8 +13,6 @@ import {
   EyeOff,
   SlidersHorizontal,
   SquareFunction,
-  Settings,
-  Grid3x3,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -22,7 +20,6 @@ import { Button } from "./ui/button";
 import { Fader } from "./ui/fader";
 import { NumberInput } from "./ui/number-input";
 import { Toggle } from "./ui/toggle";
-import ThemeToggle from "./ThemeToggle";
 import {
   sceneState,
   pushUndo,
@@ -71,15 +68,13 @@ const MODE_PARAM: Partial<Record<TransferMode, string>> = {
   engrave: "Depth",
 };
 
-const RENDER_LABELS = ["Lit", "Depth", "Normals", "Shape ID", "Iterations"];
-
 const MIN_SECTION_HEIGHT = 80;
 const HEADER_HEIGHT = 33;
 const DIVIDER_HEIGHT = 4;
 const DEG = Math.PI / 180;
 
-type SectionKey = "settings" | "layers" | "properties";
-const SECTION_KEYS: SectionKey[] = ["settings", "layers", "properties"];
+type SectionKey = "layers" | "properties";
+const SECTION_KEYS: SectionKey[] = ["layers", "properties"];
 
 // --- Small sub-components ---
 
@@ -285,13 +280,13 @@ function initSectionHeights(
 ): Record<SectionKey, number> {
   const expandedKeys = getExpandedKeys(collapsed);
   if (expandedKeys.length === 0)
-    return { settings: 0, layers: 0, properties: 0 };
+    return { layers: 0, properties: 0 };
   const headerTotal = SECTION_KEYS.length * HEADER_HEIGHT;
   const dividerCount = Math.max(0, expandedKeys.length - 1);
   const available =
     containerHeight - headerTotal - dividerCount * DIVIDER_HEIGHT;
   const each = Math.max(MIN_SECTION_HEIGHT, available / expandedKeys.length);
-  return { settings: each, layers: each, properties: each };
+  return { layers: each, properties: each };
 }
 
 function collapseSection(
@@ -361,7 +356,6 @@ export default function SidePanel() {
   const [showShapeFx, setShowShapeFx] = useState(false);
 
   const [collapsed, setCollapsed] = useState<Record<SectionKey, boolean>>({
-    settings: true,
     layers: false,
     properties: false,
   });
@@ -369,7 +363,6 @@ export default function SidePanel() {
   const [sectionHeights, setSectionHeights] = useState<
     Record<SectionKey, number>
   >({
-    settings: 0,
     layers: 0,
     properties: 0,
   });
@@ -450,12 +443,12 @@ export default function SidePanel() {
       ref={containerRef}
       className="fixed top-0 right-0 h-full w-56 bg-accent border-l border-border flex flex-col z-50 overflow-hidden"
     >
-      {/* === Settings Section === */}
+      {/* === Layers Section === */}
       <SectionHeader
-        icon={Settings}
-        title="Settings"
-        collapsed={collapsed.settings}
-        onToggle={() => toggleSection("settings")}
+        icon={Layers}
+        title="Layers"
+        collapsed={collapsed.layers}
+        onToggle={() => toggleSection("layers")}
         actions={
           <Button
             variant="ghost"
@@ -471,31 +464,6 @@ export default function SidePanel() {
             <PanelRightClose size={16} />
           </Button>
         }
-      />
-      {!collapsed.settings && (
-        <div
-          className="overflow-y-auto overflow-x-hidden min-h-0"
-          style={{ height: sectionHeights.settings }}
-        >
-          <SettingsBody />
-        </div>
-      )}
-
-      {/* Divider between Settings and Layers */}
-      {!collapsed.settings && !collapsed.layers && (
-        <DragDivider
-          onPointerDown={dividerPointerDown("settings", "layers")}
-          onPointerMove={dividerPointerMove}
-          onPointerUp={dividerPointerUp}
-        />
-      )}
-
-      {/* === Layers Section === */}
-      <SectionHeader
-        icon={Layers}
-        title="Layers"
-        collapsed={collapsed.layers}
-        onToggle={() => toggleSection("layers")}
       />
       {!collapsed.layers && (
         <div
@@ -770,75 +738,6 @@ export default function SidePanel() {
           )}
         </div>
       )}
-    </div>
-  );
-}
-
-// --- Settings body ---
-
-function SettingsBody() {
-  const snap = useSnapshot(sceneState);
-
-  return (
-    <div className="p-3 space-y-3">
-      <div className="flex items-center justify-between">
-        <span className="text-[11px] text-muted-foreground">Theme</span>
-        <ThemeToggle />
-      </div>
-      <div className="flex items-center justify-between">
-        <span className="text-[11px] text-muted-foreground">Ground</span>
-        <Toggle
-          pressed={snap.showGroundPlane}
-          onPressedChange={() => {
-            sceneState.showGroundPlane = !sceneState.showGroundPlane;
-          }}
-          size="icon"
-          title="Ground Shadows"
-          className="h-7 w-7"
-        >
-          <Layers size={16} />
-        </Toggle>
-      </div>
-      <div className="flex items-center justify-between">
-        <span className="text-[11px] text-muted-foreground">Debug Chunks</span>
-        <Toggle
-          pressed={snap.showDebugChunks}
-          onPressedChange={() => {
-            sceneState.showDebugChunks = !sceneState.showDebugChunks;
-          }}
-          size="icon"
-          title="Debug Chunks"
-          className="h-7 w-7"
-        >
-          <Grid3x3 size={16} />
-        </Toggle>
-      </div>
-      <div className="flex items-center justify-between">
-        <span className="text-[11px] text-muted-foreground">Render</span>
-        <Toggle
-          pressed={snap.renderMode !== 0}
-          onPressedChange={() => {
-            sceneState.renderMode = ((snap.renderMode + 1) % 5) as
-              | 0
-              | 1
-              | 2
-              | 3
-              | 4;
-          }}
-          size="icon"
-          title={`Render: ${RENDER_LABELS[snap.renderMode]}`}
-          className="h-7 w-7"
-        >
-          <div className="relative">
-            <Eye size={16} />
-            {snap.renderMode !== 0 && (
-              <span className="absolute -top-1 -right-1.5 text-[7px] font-bold leading-none">
-                {["", "Z", "N", "ID", "It"][snap.renderMode]}
-              </span>
-            )}
-          </div>
-        </Toggle>
-      </div>
     </div>
   );
 }

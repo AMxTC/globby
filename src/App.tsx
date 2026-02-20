@@ -16,6 +16,7 @@ import { themeState } from "./state/themeStore";
 import { setupHotkeys } from "./lib/hotkeys";
 import { bindCursorCanvas } from "./lib/cursors";
 import ContextMenu from "./components/ContextMenu";
+import AppMenu from "./components/AppMenu";
 
 function MarqueeOverlay({ marquee }: { marquee: { x1: number; y1: number; x2: number; y2: number } }) {
   const isWindow = marquee.x2 >= marquee.x1;
@@ -326,6 +327,7 @@ export default function App() {
         />
       )}
       {snap.marquee && <MarqueeOverlay marquee={snap.marquee} />}
+      <AppMenu />
       <Toolbar />
       <SidePanel />
       <ContextMenu />
