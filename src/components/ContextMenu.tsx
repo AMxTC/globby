@@ -47,7 +47,7 @@ const itemClass =
 
 function MenuItemList({ items }: { items: readonly ContextMenuItem[] }) {
   const [openSub, setOpenSub] = useState<number | null>(null);
-  const subTimeout = useRef<ReturnType<typeof setTimeout>>();
+  const subTimeout = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   function enterSub(i: number) {
     clearTimeout(subTimeout.current);
@@ -177,7 +177,7 @@ export default function ContextMenu() {
       className="fixed z-[200] min-w-[180px] rounded-md border border-border bg-background text-foreground shadow-md py-1"
       style={{ left: snap.x, top: snap.y }}
     >
-      <MenuItemList items={snap.items} />
+      <MenuItemList items={snap.items as ContextMenuItem[]} />
     </div>
   );
 }

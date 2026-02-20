@@ -9,10 +9,12 @@ import {
 import type { ContextMenuItem } from "../ContextMenu";
 import type { Layer } from "../../state/sceneStore";
 
+type ReadonlyLayer = Readonly<Pick<Layer, "id" | "name">>;
+
 export function buildLayerMenu(
-  layer: Layer,
+  layer: ReadonlyLayer,
   layerCount: number,
-  startEditing: (layer: Layer) => void,
+  startEditing: (layer: ReadonlyLayer) => void,
 ): ContextMenuItem[] {
   return [
     {

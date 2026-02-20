@@ -790,10 +790,11 @@ export function flipShapes(ids: string[], axis: 0 | 1 | 2) {
     shape.position[axis] = 2 * centroid[axis] - shape.position[axis];
     // For polygons, mirror vertices on the relevant local axis
     if (shape.type === "polygon" && shape.vertices) {
-      const localAxis = axis === 0 ? 0 : axis === 2 ? 1 : -1; // x->0, z->1
+      const localAxis: 0 | 1 | -1 = axis === 0 ? 0 : axis === 2 ? 1 : -1; // x->0, z->1
       if (localAxis >= 0) {
+        const la = localAxis as 0 | 1;
         for (let i = 0; i < shape.vertices.length; i++) {
-          shape.vertices[i][localAxis] = -shape.vertices[i][localAxis];
+          shape.vertices[i][la] = -shape.vertices[i][la];
         }
         // Reverse winding order to maintain correct normals
         shape.vertices.reverse();
