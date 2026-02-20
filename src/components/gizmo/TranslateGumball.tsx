@@ -823,6 +823,7 @@ export default function TranslateGumball() {
 
     function onContextMenu(e: Event) {
       e.preventDefault();
+      e.stopPropagation();
     }
 
     svg.addEventListener("pointerdown", onPointerDown);

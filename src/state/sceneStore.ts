@@ -334,6 +334,55 @@ export function setActiveLayer(id: string) {
   sceneState.activeLayerId = id;
 }
 
+export function moveSelectedToLayer(layerId: string) {
+  const ids = sceneState.selectedShapeIds;
+  if (ids.length === 0) return;
+  pushUndo();
+  const idSet = new Set(ids);
+  for (const shape of sceneState.shapes) {
+    if (idSet.has(shape.id)) shape.layerId = layerId;
+  }
+  sceneState.version++;
+}
+
+export function duplicateLayer(id: string) {
+  const layer = sceneState.layers.find((l) => l.id === id);
+  if (!layer) return;
+  pushUndo();
+  const newLayerId = String(nextLayerId++);
+  const idx = sceneState.layers.indexOf(layer);
+  sceneState.layers.splice(idx + 1, 0, {
+    id: newLayerId,
+    name: `${layer.name} Copy`,
+    transferMode: layer.transferMode,
+    opacity: layer.opacity,
+    transferParam: layer.transferParam,
+    visible: layer.visible,
+    fx: layer.fx,
+    fxParams: layer.fxParams ? [...layer.fxParams] as Vec3 : undefined,
+  });
+  // Duplicate all shapes on the layer
+  for (const shape of [...sceneState.shapes]) {
+    if (shape.layerId !== id) continue;
+    sceneState.shapes.push({
+      id: String(nextId++),
+      type: shape.type,
+      position: [...shape.position] as Vec3,
+      rotation: [...shape.rotation] as Vec3,
+      size: [...shape.size] as Vec3,
+      scale: shape.scale,
+      layerId: newLayerId,
+      fx: shape.fx,
+      fxParams: shape.fxParams ? [...shape.fxParams] as Vec3 : undefined,
+      vertices: shape.vertices ? shape.vertices.map(v => [...v] as [number, number]) : undefined,
+      capped: shape.capped,
+      wallThickness: shape.wallThickness,
+    });
+  }
+  sceneState.activeLayerId = newLayerId;
+  sceneState.version++;
+}
+
 export function reorderLayers(fromIndex: number, toIndex: number) {
   if (fromIndex === toIndex) return;
   pushUndo();
@@ -545,6 +594,13 @@ export function toggleShapeSelection(id: string) {
   }
 }
 
+export function selectShapesOnLayer(layerId: string) {
+  sceneState.selectedShapeIds = sceneState.shapes
+    .filter((s) => s.layerId === layerId)
+    .map((s) => s.id);
+  sceneState.editMode = "object";
+}
+
 export function selectAll() {
   const visibleLayerIds = new Set(
     sceneState.layers.filter((l) => l.visible).map((l) => l.id),
@@ -715,6 +771,63 @@ export function scaleShapesAroundPivot(
       pivot[2] + (shape.position[2] - pivot[2]) * scaleFactor,
     ];
     shape.scale = shape.scale * scaleFactor;
+  }
+  sceneState.version++;
+}
+
+export function flipShapes(ids: string[], axis: 0 | 1 | 2) {
+  if (ids.length === 0) return;
+  pushUndo();
+  // Compute centroid
+  let cx = 0, cy = 0, cz = 0, count = 0;
+  for (const id of ids) {
+    const shape = sceneState.shapes.find((s) => s.id === id);
+    if (!shape) continue;
+    cx += shape.position[0];
+    cy += shape.position[1];
+    cz += shape.position[2];
+    count++;
+  }
+  if (count === 0) return;
+  const centroid: Vec3 = [cx / count, cy / count, cz / count];
+  for (const id of ids) {
+    const shape = sceneState.shapes.find((s) => s.id === id);
+    if (!shape) continue;
+    // Mirror position on the given axis relative to the centroid
+    shape.position[axis] = 2 * centroid[axis] - shape.position[axis];
+    // For polygons, mirror vertices on the relevant local axis
+    if (shape.type === "polygon" && shape.vertices) {
+      const localAxis = axis === 0 ? 0 : axis === 2 ? 1 : -1; // x->0, z->1
+      if (localAxis >= 0) {
+        for (let i = 0; i < shape.vertices.length; i++) {
+          shape.vertices[i][localAxis] = -shape.vertices[i][localAxis];
+        }
+        // Reverse winding order to maintain correct normals
+        shape.vertices.reverse();
+      }
+    }
+  }
+  sceneState.version++;
+}
+
+export function distributeShapes(ids: string[], axis: 0 | 1 | 2) {
+  if (ids.length < 3) return;
+  // Gather shapes with their positions
+  const entries: { shape: SDFShape; pos: number }[] = [];
+  for (const id of ids) {
+    const shape = sceneState.shapes.find((s) => s.id === id);
+    if (!shape) continue;
+    entries.push({ shape, pos: shape.position[axis] });
+  }
+  if (entries.length < 3) return;
+  pushUndo();
+  // Sort by position on the axis
+  entries.sort((a, b) => a.pos - b.pos);
+  const first = entries[0].pos;
+  const last = entries[entries.length - 1].pos;
+  const step = (last - first) / (entries.length - 1);
+  for (let i = 1; i < entries.length - 1; i++) {
+    entries[i].shape.position[axis] = first + step * i;
   }
   sceneState.version++;
 }

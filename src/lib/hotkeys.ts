@@ -18,10 +18,8 @@ import {
   exitEditMode,
   undo,
   redo,
-  addShape,
-  type Vec3,
-  type SDFShape,
 } from "../state/sceneStore";
+import { copyShapes, pasteShapes, cutShapes } from "./clipboard";
 import * as THREE from "three";
 
 interface KeyCombo {
@@ -54,8 +52,6 @@ function isInputFocused(e: KeyboardEvent): boolean {
   if (el.closest(".monaco-editor")) return true;
   return false;
 }
-
-let clipboard: Omit<SDFShape, "id" | "layerId">[] = [];
 
 const HOTKEYS: HotkeyDef[] = [
   {
@@ -143,82 +139,19 @@ const HOTKEYS: HotkeyDef[] = [
     name: "Copy",
     description: "Copy selected shapes",
     combo: { key: "c", meta: true },
-    action: () => {
-      const ids = sceneState.selectedShapeIds;
-      if (ids.length === 0) return;
-      clipboard = [];
-      for (const id of ids) {
-        const shape = sceneState.shapes.find((s) => s.id === id);
-        if (!shape) continue;
-        clipboard.push({
-          type: shape.type,
-          position: [...shape.position] as Vec3,
-          rotation: [...shape.rotation] as Vec3,
-          size: [...shape.size] as Vec3,
-          scale: shape.scale,
-          fx: shape.fx,
-          fxParams: shape.fxParams ? ([...shape.fxParams] as Vec3) : undefined,
-          vertices: shape.vertices
-            ? shape.vertices.map((v) => [...v] as [number, number])
-            : undefined,
-          capped: shape.capped,
-          wallThickness: shape.wallThickness,
-        });
-      }
-    },
+    action: copyShapes,
   },
   {
     name: "Paste",
     description: "Paste shapes to active layer",
     combo: { key: "v", meta: true },
-    action: () => {
-      if (clipboard.length === 0) return;
-      const newIds: string[] = [];
-      for (const item of clipboard) {
-        addShape({
-          ...item,
-          position: [...item.position] as Vec3,
-          rotation: [...item.rotation] as Vec3,
-          size: [...item.size] as Vec3,
-          vertices: item.vertices
-            ? item.vertices.map((v) => [...v] as [number, number])
-            : undefined,
-          fxParams: item.fxParams ? ([...item.fxParams] as Vec3) : undefined,
-        });
-        const last = sceneState.shapes[sceneState.shapes.length - 1];
-        if (last) newIds.push(last.id);
-      }
-      sceneState.selectedShapeIds = newIds;
-    },
+    action: pasteShapes,
   },
   {
     name: "Cut",
     description: "Cut selected shapes",
     combo: { key: "x", meta: true },
-    action: () => {
-      const ids = sceneState.selectedShapeIds;
-      if (ids.length === 0) return;
-      clipboard = [];
-      for (const id of ids) {
-        const shape = sceneState.shapes.find((s) => s.id === id);
-        if (!shape) continue;
-        clipboard.push({
-          type: shape.type,
-          position: [...shape.position] as Vec3,
-          rotation: [...shape.rotation] as Vec3,
-          size: [...shape.size] as Vec3,
-          scale: shape.scale,
-          fx: shape.fx,
-          fxParams: shape.fxParams ? ([...shape.fxParams] as Vec3) : undefined,
-          vertices: shape.vertices
-            ? shape.vertices.map((v) => [...v] as [number, number])
-            : undefined,
-          capped: shape.capped,
-          wallThickness: shape.wallThickness,
-        });
-      }
-      deleteSelectedShapes();
-    },
+    action: cutShapes,
   },
   {
     name: "Duplicate",

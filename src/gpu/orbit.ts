@@ -21,27 +21,38 @@ export function createOrbitCamera(canvas: HTMLCanvasElement) {
     RIGHT: MOUSE.ROTATE,
   };
 
-  // Swap to pan when Shift is held
+  // Defer orbit/pan cursor until actual mouse movement after right-click
+  let pendingRightCursor: "orbit" | "grabbing" | null = null;
+
   function onMouseDown(e: MouseEvent) {
     if (e.button === 2 && e.shiftKey) {
       controls.mouseButtons.RIGHT = MOUSE.PAN;
-      setCursor("grabbing");
+      pendingRightCursor = "grabbing";
     } else if (e.button === 2) {
-      setCursor("orbit");
+      pendingRightCursor = "orbit";
+    }
+  }
+  function onMouseMove() {
+    if (pendingRightCursor) {
+      setCursor(pendingRightCursor);
+      pendingRightCursor = null;
     }
   }
   function onMouseUp(e: MouseEvent) {
     if (e.button === 2) {
+      pendingRightCursor = null;
       controls.mouseButtons.RIGHT = MOUSE.ROTATE;
       setCursor(null);
     }
   }
   canvas.addEventListener("mousedown", onMouseDown);
+  canvas.addEventListener("mousemove", onMouseMove);
   canvas.addEventListener("mouseup", onMouseUp);
 
   const origDispose = controls.dispose.bind(controls);
   controls.dispose = () => {
     canvas.removeEventListener("mousedown", onMouseDown);
+    canvas.removeEventListener("mousemove", onMouseMove);
     canvas.removeEventListener("mouseup", onMouseUp);
     origDispose();
   };

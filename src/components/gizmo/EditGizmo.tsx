@@ -331,6 +331,7 @@ export default function EditGizmo() {
 
     function onContextMenu(e: Event) {
       e.preventDefault();
+      e.stopPropagation();
     }
 
     svg.addEventListener("pointerdown", onPointerDown);

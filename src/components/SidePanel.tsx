@@ -46,6 +46,8 @@ import {
   setShapeCapped,
   setShapeWallThickness,
 } from "../state/sceneStore";
+import { openContextMenu } from "./ContextMenu";
+import { buildLayerMenu } from "./menus/layerMenu";
 import { FxEditor } from "./FxEditor";
 import type { Layer, Vec3 } from "../state/sceneStore";
 import type { TransferMode, ShapeType } from "../constants";
@@ -350,7 +352,9 @@ function expandSection(
 
 export default function SidePanel() {
   const snap = useSnapshot(sceneState);
-  const [open, setOpen] = useState(() => localStorage.getItem("sidepanel") !== "closed");
+  const [open, setOpen] = useState(
+    () => localStorage.getItem("sidepanel") !== "closed",
+  );
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [showLayerFx, setShowLayerFx] = useState(false);
@@ -428,7 +432,10 @@ export default function SidePanel() {
         <Button
           variant="outline"
           size="icon"
-          onClick={() => { setOpen(true); localStorage.setItem("sidepanel", "open"); }}
+          onClick={() => {
+            setOpen(true);
+            localStorage.setItem("sidepanel", "open");
+          }}
           title="Show Layers"
           className="bg-accent border-border text-muted-foreground"
         >
@@ -456,7 +463,8 @@ export default function SidePanel() {
             className="h-7 w-7 text-muted-foreground hover:text-foreground"
             onClick={(e) => {
               e.stopPropagation();
-              setOpen(false); localStorage.setItem("sidepanel", "closed");
+              setOpen(false);
+              localStorage.setItem("sidepanel", "closed");
             }}
             title="Collapse Panel"
           >
@@ -587,6 +595,15 @@ export default function SidePanel() {
                         : "hover:bg-muted/60",
                     )}
                     onClick={() => setActiveLayer(layer.id)}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      openContextMenu(
+                        e.clientX,
+                        e.clientY,
+                        buildLayerMenu(layer, snap.layers.length, startEditing),
+                      );
+                    }}
                   >
                     <button
                       className={cn(
