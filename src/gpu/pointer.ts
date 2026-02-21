@@ -964,7 +964,8 @@ export function setupPointer(
         Math.sqrt(dx * dx + dy * dy) > MARQUEE_THRESHOLD
       ) {
         // Check if we clicked any shape → select it (if needed) and start shape drag
-        if (selectPickResult?.shapeId) {
+        // In edit mode, skip shape drag — marquee selects vertices instead
+        if (selectPickResult?.shapeId && sceneState.editMode !== "edit") {
           const hitId = selectPickResult.shapeId;
           const alreadySelected = sceneState.selectedShapeIds.includes(hitId);
 
@@ -1106,6 +1107,59 @@ export function setupPointer(
       if (!point) return;
       if (e.buttons & 1) e.stopImmediatePropagation();
       updateRadius(point);
+    }
+  }
+
+  /** Select vertices of the currently-edited polygon that fall inside the marquee. */
+  function selectEditVertices(
+    cssLeft: number,
+    cssTop: number,
+    cssW: number,
+    cssH: number,
+    shift: boolean,
+  ) {
+    const shapeId = sceneState.selectedShapeIds[0];
+    const shape = shapeId ? sceneState.shapes.find((s) => s.id === shapeId) : null;
+    if (!shape?.vertices || shape.type !== "polygon") return;
+
+    const rect = canvas.getBoundingClientRect();
+    const mLeft = cssLeft - rect.left;
+    const mTop = cssTop - rect.top;
+    const mRight = mLeft + cssW;
+    const mBottom = mTop + cssH;
+
+    camera.updateMatrixWorld();
+    _vpMat.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+
+    const cw = canvas.clientWidth;
+    const ch = canvas.clientHeight;
+    const m = eulerToMatrix3(shape.rotation[0], shape.rotation[1], shape.rotation[2]);
+    const s = shape.scale;
+
+    const hitIndices: number[] = [];
+    for (let i = 0; i < shape.vertices.length; i++) {
+      const vx = shape.vertices[i][0];
+      const vz = shape.vertices[i][1];
+      // localToWorld: position + rotationMatrix * (scale * localOffset)
+      const wx = shape.position[0] + (m[0] * vx + m[3] * (-shape.size[1]) + m[6] * vz) * s;
+      const wy = shape.position[1] + (m[1] * vx + m[4] * (-shape.size[1]) + m[7] * vz) * s;
+      const wz = shape.position[2] + (m[2] * vx + m[5] * (-shape.size[1]) + m[8] * vz) * s;
+      const [sx, sy, vis] = worldToScreen([wx, wy, wz], _vpMat, cw, ch);
+      if (!vis) continue;
+      if (sx >= mLeft && sx <= mRight && sy >= mTop && sy <= mBottom) {
+        hitIndices.push(i);
+      }
+    }
+
+    if (shift) {
+      for (const idx of hitIndices) {
+        sceneRefs.selectedPolyVertIndices.add(idx);
+      }
+    } else {
+      sceneRefs.selectedPolyVertIndices.clear();
+      for (const idx of hitIndices) {
+        sceneRefs.selectedPolyVertIndices.add(idx);
+      }
     }
   }
 
@@ -1372,7 +1426,23 @@ export function setupPointer(
       // Tool switched mid-drag (e.g. hotkey) — just clean up
       if (!isSelectTool) return;
 
-      if (marqueeRect) {
+      // In edit mode, marquee and click select vertices instead of objects
+      if (sceneState.editMode === "edit") {
+        if (marqueeRect) {
+          const left = Math.min(marqueeRect.x1, marqueeRect.x2);
+          const top = Math.min(marqueeRect.y1, marqueeRect.y2);
+          const width = Math.abs(marqueeRect.x2 - marqueeRect.x1);
+          const height = Math.abs(marqueeRect.y2 - marqueeRect.y1);
+          selectEditVertices(left, top, width, height, shiftKey);
+        } else if (!sceneRefs.pointerConsumed) {
+          // Click on empty space in edit mode: deselect all vertices
+          if (!shiftKey) {
+            sceneRefs.selectedPolyVertIndices.clear();
+          }
+        } else {
+          sceneRefs.pointerConsumed = false;
+        }
+      } else if (marqueeRect) {
         const isWindow = marqueeRect.x2 >= marqueeRect.x1;
         const left = Math.min(marqueeRect.x1, marqueeRect.x2);
         const top = Math.min(marqueeRect.y1, marqueeRect.y2);

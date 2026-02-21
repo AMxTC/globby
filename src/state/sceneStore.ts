@@ -627,7 +627,7 @@ function resetDrag() {
 export function selectShape(id: string | null) {
   sceneState.selectedShapeIds = id ? [id] : [];
   sceneState.editMode = "object";
-  sceneRefs.selectedPolyVertIdx = null;
+  sceneRefs.selectedPolyVertIndices.clear();
 }
 
 export function toggleShapeSelection(id: string) {
@@ -897,7 +897,7 @@ export function enterEditMode() {
 
 export function exitEditMode() {
   sceneState.editMode = "object";
-  sceneRefs.selectedPolyVertIdx = null;
+  sceneRefs.selectedPolyVertIndices.clear();
 }
 
 export function editPolyVertices(shapeId: string, newVerts: [number, number][]) {
@@ -921,17 +921,24 @@ export function insertPolyVertex(shapeId: string, afterIdx: number, localXZ: [nu
   sceneState.version++;
 }
 
-export function deletePolyVertex(shapeId: string, vertIdx: number) {
+export function deletePolyVertices(shapeId: string, vertIndices: Set<number>) {
   const shape = sceneState.shapes.find(s => s.id === shapeId);
-  if (!shape?.vertices || shape.vertices.length <= 3) return;
-  if (vertIdx < 0 || vertIdx >= shape.vertices.length) return;
+  if (!shape?.vertices) return;
+  // Sort indices descending so splicing doesn't shift later indices
+  const sorted = [...vertIndices].sort((a, b) => b - a);
+  // Don't delete if it would leave fewer than 3 vertices
+  if (shape.vertices.length - sorted.length < 3) return;
   pushUndo();
-  shape.vertices.splice(vertIdx, 1);
+  for (const idx of sorted) {
+    if (idx >= 0 && idx < shape.vertices.length) {
+      shape.vertices.splice(idx, 1);
+    }
+  }
   // Recompute bounding radius
   let maxR = 0;
   for (const [vx, vz] of shape.vertices) maxR = Math.max(maxR, Math.sqrt(vx * vx + vz * vz));
   shape.size = [maxR, shape.size[1], shape.vertices.length];
-  sceneRefs.selectedPolyVertIdx = null;
+  sceneRefs.selectedPolyVertIndices.clear();
   sceneState.version++;
 }
 
@@ -1008,7 +1015,7 @@ export const sceneRefs: {
   editPolyDragIdx: number | null;
   editPolyStartVerts: [number, number][] | null;
   editPolyStartPos: Vec3 | null;
-  selectedPolyVertIdx: number | null;
+  selectedPolyVertIndices: Set<number>;
   /** Set true by overlay handlers to suppress the next canvas select/deselect */
   pointerConsumed: boolean;
   /** Captures Ctrl state at draw start for mask shape creation */
@@ -1024,7 +1031,7 @@ export const sceneRefs: {
   editPolyDragIdx: null,
   editPolyStartVerts: null,
   editPolyStartPos: null,
-  selectedPolyVertIdx: null,
+  selectedPolyVertIndices: new Set<number>(),
   pointerConsumed: false,
   pendingMaskShape: false,
 };

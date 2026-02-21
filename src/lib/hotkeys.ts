@@ -9,7 +9,7 @@ import {
   selectShape,
   selectAll,
   deleteSelectedShapes,
-  deletePolyVertex,
+  deletePolyVertices,
   duplicateSelectedShapes,
   cancelDrag,
   setTool,
@@ -80,10 +80,10 @@ export const HOTKEYS: HotkeyDef[] = [
     action: () => {
       if (
         sceneState.editMode === "edit" &&
-        sceneRefs.selectedPolyVertIdx !== null
+        sceneRefs.selectedPolyVertIndices.size > 0
       ) {
         const shapeId = sceneState.selectedShapeIds[0];
-        if (shapeId) deletePolyVertex(shapeId, sceneRefs.selectedPolyVertIdx);
+        if (shapeId) deletePolyVertices(shapeId, sceneRefs.selectedPolyVertIndices);
         return;
       }
       deleteSelectedShapes();
@@ -96,10 +96,10 @@ export const HOTKEYS: HotkeyDef[] = [
     action: () => {
       if (
         sceneState.editMode === "edit" &&
-        sceneRefs.selectedPolyVertIdx !== null
+        sceneRefs.selectedPolyVertIndices.size > 0
       ) {
         const shapeId = sceneState.selectedShapeIds[0];
-        if (shapeId) deletePolyVertex(shapeId, sceneRefs.selectedPolyVertIdx);
+        if (shapeId) deletePolyVertices(shapeId, sceneRefs.selectedPolyVertIndices);
         return;
       }
       deleteSelectedShapes();

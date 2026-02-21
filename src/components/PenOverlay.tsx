@@ -243,7 +243,8 @@ export default function PenOverlay() {
 
       insertPolyVertex(shapeId, i, localXZ);
       const newIdx = i + 1;
-      sceneRefs.selectedPolyVertIdx = newIdx;
+      sceneRefs.selectedPolyVertIndices.clear();
+      sceneRefs.selectedPolyVertIndices.add(newIdx);
       hideMidpoint();
       snapEdgeIdx = -1;
 
@@ -273,7 +274,21 @@ export default function PenOverlay() {
       e.preventDefault();
       e.stopPropagation();
 
-      sceneRefs.selectedPolyVertIdx = idx;
+      // Shift-click: toggle vertex in selection set
+      if (e.shiftKey) {
+        if (sceneRefs.selectedPolyVertIndices.has(idx)) {
+          sceneRefs.selectedPolyVertIndices.delete(idx);
+        } else {
+          sceneRefs.selectedPolyVertIndices.add(idx);
+        }
+      } else {
+        // If clicking an already-selected vertex, keep the multi-selection for drag
+        if (!sceneRefs.selectedPolyVertIndices.has(idx)) {
+          sceneRefs.selectedPolyVertIndices.clear();
+          sceneRefs.selectedPolyVertIndices.add(idx);
+        }
+      }
+
       sceneRefs.editPolyDragIdx = idx;
       sceneRefs.editPolyStartVerts = shape.vertices.map(
         (v) => [...v] as [number, number],
@@ -298,6 +313,8 @@ export default function PenOverlay() {
       const shapeId = sceneState.selectedShapeIds[0];
       const shape = sceneState.shapes.find((s) => s.id === shapeId);
       if (!shape?.vertices) return;
+      const startVerts = sceneRefs.editPolyStartVerts;
+      if (!startVerts) return;
 
       const m = eulerToMatrix3(
         shape.rotation[0],
@@ -328,13 +345,25 @@ export default function PenOverlay() {
       const dx = hit[0] - shape.position[0];
       const dy = hit[1] - shape.position[1];
       const dz = hit[2] - shape.position[2];
-      // Transpose of column-major m: row i of transpose = column i of m
-      // m[0],m[1],m[2] = col0; m[3],m[4],m[5] = col1; m[6],m[7],m[8] = col2
-      // invRot row 0 (local X): m[0], m[1], m[2] -> dot with dx,dy,dz
       const localX = (m[0] * dx + m[1] * dy + m[2] * dz) / s;
       const localZ = (m[6] * dx + m[7] * dy + m[8] * dz) / s;
 
-      shape.vertices[idx] = [localX, localZ];
+      // Compute delta from the dragged vertex's start position
+      const deltaX = localX - startVerts[idx][0];
+      const deltaZ = localZ - startVerts[idx][1];
+
+      // Move all selected vertices by the same delta
+      const selected = sceneRefs.selectedPolyVertIndices;
+      for (const vi of selected) {
+        if (vi >= 0 && vi < shape.vertices.length && vi < startVerts.length) {
+          shape.vertices[vi] = [startVerts[vi][0] + deltaX, startVerts[vi][1] + deltaZ];
+        }
+      }
+      // Also move the drag vertex if not in the selection (shouldn't happen, but safety)
+      if (!selected.has(idx)) {
+        shape.vertices[idx] = [localX, localZ];
+      }
+
       recenterPolyBounds(shape);
       sceneState.version++;
     }
@@ -451,13 +480,13 @@ export default function PenOverlay() {
       }
 
       // Draw vertex circles + position hit areas
-      const selectedIdx = sceneRefs.selectedPolyVertIdx;
+      const selectedVerts = sceneRefs.selectedPolyVertIndices;
       for (let i = 0; i < MAX_VERTS; i++) {
         if (i < count && screenPts[i].vis) {
           vertEls[i].setAttribute("cx", String(screenPts[i].x));
           vertEls[i].setAttribute("cy", String(screenPts[i].y));
           vertEls[i].setAttribute("r", String(EDIT_VERTEX_RADIUS));
-          const isSel = i === selectedIdx;
+          const isSel = selectedVerts.has(i);
           vertEls[i].setAttribute("fill", isSel ? MAGENTA : "white");
           vertEls[i].setAttribute("stroke", isSel ? WHITE : MAGENTA);
           vertEls[i].setAttribute("stroke-width", isSel ? "1.0" : "1.5");
