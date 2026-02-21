@@ -977,7 +977,7 @@ export class GPURenderer {
     f32[48] = 100.0;
     u32[49] = sceneState.showGroundPlane ? 1 : 0;
     u32[50] = sceneState.renderMode;
-    f32[51] = 0;
+    u32[51] = sceneState.showGrid ? 1 : 0;
     // 52-54: world_bounds_min (vec3<f32>) + pad at 55
     const bmin = this.chunkManager.worldBoundsMin;
     f32[52] = bmin[0];

@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useSnapshot } from "valtio";
-import { X, Layers, Grid3x3, Eye } from "lucide-react";
+import { X, Layers, Grid3x3, Eye, Bug } from "lucide-react";
 import { sceneState } from "../state/sceneStore";
 import { Toggle } from "./ui/toggle";
 import ThemeToggle from "./ThemeToggle";
@@ -69,6 +69,20 @@ export default function SettingsModal({
             </Toggle>
           </div>
           <div className="flex items-center justify-between">
+            <span className="text-[11px] text-muted-foreground">Grid</span>
+            <Toggle
+              pressed={snap.showGrid}
+              onPressedChange={() => {
+                sceneState.showGrid = !sceneState.showGrid;
+              }}
+              size="icon"
+              title="Grid"
+              className="h-7 w-7"
+            >
+              <Grid3x3 size={16} />
+            </Toggle>
+          </div>
+          <div className="flex items-center justify-between">
             <span className="text-[11px] text-muted-foreground">Debug Chunks</span>
             <Toggle
               pressed={snap.showDebugChunks}
@@ -79,7 +93,7 @@ export default function SettingsModal({
               title="Debug Chunks"
               className="h-7 w-7"
             >
-              <Grid3x3 size={16} />
+              <Bug size={16} />
             </Toggle>
           </div>
           <div className="flex items-center justify-between">

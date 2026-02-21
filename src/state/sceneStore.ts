@@ -78,6 +78,7 @@ export const sceneState = proxy({
   editMode: "object" as "object" | "edit",
   showDebugChunks: false,
   showGroundPlane: true,
+  showGrid: true,
   renderMode: 0 as 0 | 1 | 2 | 3 | 4, // 0=lit, 1=depth, 2=normals, 3=shape ID, 4=iterations
   drag: {
     active: false,
@@ -1041,6 +1042,7 @@ try {
       layers: SceneSnapshot["layers"];
       activeLayerId: string;
       showGroundPlane?: boolean;
+      showGrid?: boolean;
       renderMode?: number;
     };
     if (saved.shapes?.length) {
@@ -1048,6 +1050,7 @@ try {
       sceneState.layers.splice(0, sceneState.layers.length, ...saved.layers);
       sceneState.activeLayerId = saved.activeLayerId;
       if (saved.showGroundPlane !== undefined) sceneState.showGroundPlane = saved.showGroundPlane;
+      if (saved.showGrid !== undefined) sceneState.showGrid = saved.showGrid;
       if (saved.renderMode !== undefined) sceneState.renderMode = saved.renderMode as 0 | 1 | 2 | 3 | 4;
       sceneState.version++;
     }
@@ -1080,6 +1083,7 @@ function scheduleSave() {
         layers: sceneState.layers.map((l) => ({ ...l })),
         activeLayerId: sceneState.activeLayerId,
         showGroundPlane: sceneState.showGroundPlane,
+        showGrid: sceneState.showGrid,
         renderMode: sceneState.renderMode,
       };
       localStorage.setItem(SCENE_STORAGE_KEY, JSON.stringify(data));
@@ -1090,6 +1094,7 @@ subscribe(sceneState.shapes, scheduleSave);
 subscribe(sceneState.layers, scheduleSave);
 subscribeKey(sceneState, "activeLayerId", scheduleSave);
 subscribeKey(sceneState, "showGroundPlane", scheduleSave);
+subscribeKey(sceneState, "showGrid", scheduleSave);
 subscribeKey(sceneState, "renderMode", scheduleSave);
 
 // --- Reset scene ---

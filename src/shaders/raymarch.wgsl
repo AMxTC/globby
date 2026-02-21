@@ -13,7 +13,7 @@ struct Uniforms {
   max_distance: f32,
   show_ground_plane: u32,
   render_mode: u32,
-  _pad5: f32,
+  show_grid: u32,
   world_bounds_min: vec3<f32>,
   _pad6: f32,
   world_bounds_max: vec3<f32>,
@@ -209,19 +209,16 @@ fn fs(@builtin(position) frag_coord: vec4<f32>) -> FragOutput {
   let bmin = uniforms.world_bounds_min;
   let bmax = uniforms.world_bounds_max;
 
-  // Check if bounds are valid (non-degenerate)
-  if (all(bmin >= bmax)) {
-    return FragOutput(vec4<f32>(bg_color, 0.0), no_hit);
+  // Check if bounds are valid and ray hits AABB
+  var t_near: f32 = 0.0;
+  var t_far: f32 = -1.0; // negative = no valid range, skip raymarch
+  if (!all(bmin >= bmax)) {
+    let t_hit = intersectAABB(ro, rd, bmin, bmax);
+    if (t_hit.x <= t_hit.y && t_hit.y >= 0.0) {
+      t_near = max(t_hit.x, 0.0) + uniforms.voxel_size * 0.01;
+      t_far = t_hit.y;
+    }
   }
-
-  let t_hit = intersectAABB(ro, rd, bmin, bmax);
-
-  if (t_hit.x > t_hit.y || t_hit.y < 0.0) {
-    return FragOutput(vec4<f32>(bg_color, 0.0), no_hit);
-  }
-
-  let t_near = max(t_hit.x, 0.0) + uniforms.voxel_size * 0.01;
-  let t_far = t_hit.y;
 
   let voxel_size = uniforms.voxel_size;
   let step_size = voxel_size * 0.5;
@@ -338,15 +335,56 @@ fn fs(@builtin(position) frag_coord: vec4<f32>) -> FragOutput {
     return FragOutput(vec4<f32>(miss_col, 1.0), no_hit);
   }
 
-  // Ground plane shadow
-  if (uniforms.show_ground_plane != 0u && rd.y < 0.0) {
+  // Ground plane shadow + grid
+  if (rd.y < 0.0) {
     let t_ground = -ro.y / rd.y;
     if (t_ground > 0.0) {
       let ground_pos = ro + t_ground * rd;
-      let lig = normalize(vec3<f32>(1.0, 0.8, -0.2));
-      let shadow = shadowMarch(ground_pos, lig);
-      if (shadow < 0.5) {
-        return FragOutput(vec4<f32>(0.0, 0.0, 0.0, 0.35), vec4<f32>(ground_pos, 0.0));
+      let cam_dist = length(ground_pos - ro);
+
+      // Shadow
+      var shadow_alpha: f32 = 0.0;
+      if (uniforms.show_ground_plane != 0u) {
+        let lig = normalize(vec3<f32>(1.0, 0.8, -0.2));
+        let shadow = shadowMarch(ground_pos, lig);
+        if (shadow < 0.5) {
+          shadow_alpha = 0.35;
+        }
+      }
+
+      // Grid
+      var grid_alpha: f32 = 0.0;
+      if (uniforms.show_grid != 0u) {
+        let gx = ground_pos.x;
+        let gz = ground_pos.z;
+
+        // Analytical pixel footprint on ground plane (no derivatives needed)
+        let pixel_world = cam_dist * 2.0 / uniforms.resolution.y;
+        let fw = vec2<f32>(pixel_world);
+
+        // Grid lines at 0.1 unit spacing
+        let grid_coord = abs(fract(vec2<f32>(gx * 10.0, gz * 10.0)) - 0.5);
+        let fw_grid = fw * 10.0;
+        let line = 1.0 - smoothstep(vec2<f32>(0.0), fw_grid * 1.5, grid_coord);
+        let line_val = max(line.x, line.y);
+
+        // Fade out with distance from camera
+        let fade = 1.0 - smoothstep(5.0, 40.0, cam_dist);
+
+        grid_alpha = line_val * 0.05 * fade;
+      }
+
+      // Composite shadow and grid (premultiplied alpha)
+      // Grid lines are dark gray; shadow is black. Combine via "over" operator.
+      let grid_color = vec3<f32>(0.0) * grid_alpha; // dark lines: premultiplied black
+      let grid_a = grid_alpha;
+      let shadow_color = vec3<f32>(0.0); // shadow is black, premultiplied
+      let shadow_a = shadow_alpha;
+      // Shadow over grid (shadow on top)
+      let out_a = shadow_a + grid_a * (1.0 - shadow_a);
+      let out_color = shadow_color + grid_color * (1.0 - shadow_a);
+      if (out_a > 0.001) {
+        return FragOutput(vec4<f32>(out_color, out_a), vec4<f32>(ground_pos, 0.0));
       }
     }
   }
