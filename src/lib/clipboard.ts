@@ -22,6 +22,7 @@ function cloneShape(shape: SDFShape): Omit<SDFShape, "id" | "layerId"> {
       : undefined,
     capped: shape.capped,
     wallThickness: shape.wallThickness,
+    isMask: shape.isMask,
   };
 }
 

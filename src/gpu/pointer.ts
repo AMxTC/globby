@@ -691,6 +691,11 @@ export function setupPointer(
       e.preventDefault();
       e.stopImmediatePropagation();
 
+      // Capture Ctrl for mask on first vertex
+      if (sceneState.penVertices.length === 0) {
+        sceneRefs.pendingMaskShape = e.ctrlKey || e.metaKey;
+      }
+
       const { phase } = sceneState.drag;
 
       // Height phase: commit on click
@@ -777,6 +782,7 @@ export function setupPointer(
     if (phase === "idle") {
       e.preventDefault();
       e.stopImmediatePropagation();
+      sceneRefs.pendingMaskShape = e.ctrlKey || e.metaKey;
 
       // Compute floor hit eagerly (event coords won't survive async)
       const floorHit = getFloorPoint(e, canvas, camera);
@@ -1185,6 +1191,14 @@ export function setupPointer(
     const { px, py } = cssRectToDevicePixels(clientX, clientY, 0, 0, canvas);
     renderer.pickWorldPos(px, py).then((result) => {
       if (result && result.shapeId) {
+        // In mask edit mode, reject non-mask shapes
+        if (sceneState.maskEditLayerId !== null) {
+          const shape = sceneState.shapes.find((s) => s.id === result.shapeId);
+          if (!shape || !shape.isMask || shape.layerId !== sceneState.maskEditLayerId) {
+            if (!shift) selectShape(null);
+            return;
+          }
+        }
         // Don't reset edit mode if shape is already selected
         if (
           sceneState.editMode === "edit" &&

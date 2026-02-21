@@ -16,6 +16,7 @@ import {
   isShapeTool,
   enterEditMode,
   exitEditMode,
+  exitMaskEdit,
   undo,
   redo,
 } from "../state/sceneStore";
@@ -109,7 +110,9 @@ export const HOTKEYS: HotkeyDef[] = [
     description: "Deselect / cancel current action",
     combo: { key: "Escape" },
     action: () => {
-      if (sceneState.editMode === "edit") {
+      if (sceneState.maskEditLayerId !== null) {
+        exitMaskEdit();
+      } else if (sceneState.editMode === "edit") {
         exitEditMode();
       } else if (sceneState.drag.phase !== "idle") {
         cancelDrag();

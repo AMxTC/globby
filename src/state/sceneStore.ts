@@ -19,6 +19,7 @@ export interface SDFShape {
   vertices?: [number, number][]; // 2D XZ polygon vertices (max 16), only for polygon type
   capped?: boolean; // Polygon extrusion: true (default) = solid, false = walls only
   wallThickness?: number; // Wall thickness when uncapped (world units, default 0.03)
+  isMask?: boolean; // When true, shape is a mask (subtracted from layer's main shapes)
 }
 
 export interface Layer {
@@ -30,6 +31,7 @@ export interface Layer {
   visible: boolean;
   fx?: string; // WGSL function body, undefined = identity
   fxParams?: Vec3; // Runtime fx params [0..1] packed into GPU buffer
+  maskEnabled?: boolean; // Toggle mask on/off (defaults true when mask shapes exist)
 }
 
 export interface DragState {
@@ -95,6 +97,7 @@ export const sceneState = proxy({
   fxCompiling: false,
   penVertices: [] as [number, number][],
   penFloorY: 0,
+  maskEditLayerId: null as string | null,
   version: 1,
 });
 
@@ -113,6 +116,7 @@ type ShapeSnapshot = {
   vertices?: [number, number][];
   capped?: boolean;
   wallThickness?: number;
+  isMask?: boolean;
 }[];
 
 interface SceneSnapshot {
@@ -140,6 +144,7 @@ function snapshot(): SceneSnapshot {
       vertices: s.vertices ? s.vertices.map(v => [...v] as [number, number]) : undefined,
       capped: s.capped,
       wallThickness: s.wallThickness,
+      isMask: s.isMask,
     })),
     layers: sceneState.layers.map((l) => ({ ...l })),
     activeLayerId: sceneState.activeLayerId,
@@ -174,12 +179,22 @@ export function redo() {
 
 export function addShape(shape: Omit<SDFShape, "id" | "layerId">) {
   pushUndo();
+  // When in mask edit mode, force isMask = true
+  const isMask = sceneState.maskEditLayerId !== null ? true : shape.isMask;
   const newShape: SDFShape = {
     ...shape,
     id: nanoid(),
     layerId: sceneState.activeLayerId,
+    isMask,
   };
   sceneState.shapes.push(newShape);
+  // Auto-enable mask on layer when first mask shape is added
+  if (isMask) {
+    const layer = sceneState.layers.find((l) => l.id === newShape.layerId);
+    if (layer && layer.maskEnabled === undefined) {
+      layer.maskEnabled = true;
+    }
+  }
   sceneState.version++;
 }
 
@@ -214,6 +229,9 @@ export function closePen(height: number) {
     return;
   }
 
+  const isMask = sceneRefs.pendingMaskShape;
+  sceneRefs.pendingMaskShape = false;
+
   // Center vertices around bounding box center for tightest AABB
   let minX = Infinity, maxX = -Infinity;
   let minZ = Infinity, maxZ = -Infinity;
@@ -245,6 +263,7 @@ export function closePen(height: number) {
     size: [maxR, halfH, verts.length], // size.x=bounding radius, size.y=halfHeight, size.z=vertex count
     scale: 1,
     vertices: centered,
+    isMask: isMask || undefined,
   });
 
   cancelPen();
@@ -253,6 +272,7 @@ export function closePen(height: number) {
 export function cancelPen() {
   sceneState.penVertices.splice(0, sceneState.penVertices.length);
   sceneState.penFloorY = 0;
+  sceneRefs.pendingMaskShape = false;
 }
 
 // --- Layer CRUD ---
@@ -327,6 +347,30 @@ export function setActiveLayer(id: string) {
   sceneState.activeLayerId = id;
 }
 
+export function toggleLayerMask(id: string) {
+  const layer = sceneState.layers.find((l) => l.id === id);
+  if (!layer) return;
+  // Only toggle if layer has mask shapes
+  const hasMask = sceneState.shapes.some((s) => s.layerId === id && s.isMask);
+  if (!hasMask) return;
+  pushUndo();
+  layer.maskEnabled = layer.maskEnabled === false ? true : false;
+  sceneState.version++;
+}
+
+export function enterMaskEdit(layerId: string) {
+  sceneState.maskEditLayerId = layerId;
+  sceneState.selectedShapeIds = [];
+  sceneState.activeLayerId = layerId;
+  sceneState.version++;
+}
+
+export function exitMaskEdit() {
+  sceneState.maskEditLayerId = null;
+  sceneState.selectedShapeIds = [];
+  sceneState.version++;
+}
+
 export function moveSelectedToLayer(layerId: string) {
   const ids = sceneState.selectedShapeIds;
   if (ids.length === 0) return;
@@ -353,6 +397,7 @@ export function duplicateLayer(id: string) {
     visible: layer.visible,
     fx: layer.fx,
     fxParams: layer.fxParams ? [...layer.fxParams] as Vec3 : undefined,
+    maskEnabled: layer.maskEnabled,
   });
   // Duplicate all shapes on the layer
   for (const shape of [...sceneState.shapes]) {
@@ -370,6 +415,7 @@ export function duplicateLayer(id: string) {
       vertices: shape.vertices ? shape.vertices.map(v => [...v] as [number, number]) : undefined,
       capped: shape.capped,
       wallThickness: shape.wallThickness,
+      isMask: shape.isMask,
     });
   }
   sceneState.activeLayerId = newLayerId;
@@ -448,12 +494,16 @@ export function commitRadius() {
   const [sx, , sz] = sceneState.drag.startPoint;
   const floor = sceneState.drag.baseFloorY;
 
+  const isMask = sceneRefs.pendingMaskShape;
+  sceneRefs.pendingMaskShape = false;
+
   addShape({
     type: "sphere",
     position: [sx, floor + r, sz],
     rotation: [0, 0, 0],
     size: [r, r, r],
     scale: 1,
+    isMask: isMask || undefined,
   });
 
   resetDrag();
@@ -539,6 +589,8 @@ export function commitHeight() {
   if (sceneState.drag.phase !== "height") return;
   const tool = sceneState.activeTool;
 
+  const isMask = sceneRefs.pendingMaskShape;
+  sceneRefs.pendingMaskShape = false;
 
   const { previewPosition, previewSize } = sceneState.drag;
 
@@ -548,6 +600,7 @@ export function commitHeight() {
     rotation: [0, 0, 0],
     size: [...previewSize] as Vec3,
     scale: 1,
+    isMask: isMask || undefined,
   });
 
   resetDrag();
@@ -558,6 +611,7 @@ export function cancelDrag() {
 }
 
 function resetDrag() {
+  sceneRefs.pendingMaskShape = false;
   sceneState.drag.active = false;
   sceneState.drag.phase = "idle";
   sceneState.drag.previewSize = [0.01, 0.01, 0.01];
@@ -595,12 +649,19 @@ export function selectShapesOnLayer(layerId: string) {
 }
 
 export function selectAll() {
-  const visibleLayerIds = new Set(
-    sceneState.layers.filter((l) => l.visible).map((l) => l.id),
-  );
-  sceneState.selectedShapeIds = sceneState.shapes
-    .filter((s) => visibleLayerIds.has(s.layerId))
-    .map((s) => s.id);
+  if (sceneState.maskEditLayerId !== null) {
+    // In mask edit mode, only select mask shapes on the edited layer
+    sceneState.selectedShapeIds = sceneState.shapes
+      .filter((s) => s.layerId === sceneState.maskEditLayerId && s.isMask)
+      .map((s) => s.id);
+  } else {
+    const visibleLayerIds = new Set(
+      sceneState.layers.filter((l) => l.visible).map((l) => l.id),
+    );
+    sceneState.selectedShapeIds = sceneState.shapes
+      .filter((s) => visibleLayerIds.has(s.layerId))
+      .map((s) => s.id);
+  }
   if (sceneState.selectedShapeIds.length !== 1) {
     sceneState.editMode = "object";
   }
@@ -634,6 +695,7 @@ export function duplicateShape(id: string): string | null {
     vertices: shape.vertices ? shape.vertices.map(v => [...v] as [number, number]) : undefined,
     capped: shape.capped,
     wallThickness: shape.wallThickness,
+    isMask: shape.isMask,
   });
   sceneState.selectedShapeIds = [newId];
   sceneState.version++;
@@ -662,6 +724,7 @@ export function duplicateSelectedShapes(): string[] {
       vertices: shape.vertices ? shape.vertices.map(v => [...v] as [number, number]) : undefined,
       capped: shape.capped,
       wallThickness: shape.wallThickness,
+      isMask: shape.isMask,
     });
     newIds.push(newId);
   }
@@ -947,6 +1010,8 @@ export const sceneRefs: {
   selectedPolyVertIdx: number | null;
   /** Set true by overlay handlers to suppress the next canvas select/deselect */
   pointerConsumed: boolean;
+  /** Captures Ctrl state at draw start for mask shape creation */
+  pendingMaskShape: boolean;
 } = {
   camera: null,
   controls: null,
@@ -960,6 +1025,7 @@ export const sceneRefs: {
   editPolyStartPos: null,
   selectedPolyVertIdx: null,
   pointerConsumed: false,
+  pendingMaskShape: false,
 };
 
 // --- Auto-save to localStorage ---
@@ -1009,6 +1075,7 @@ function scheduleSave() {
           vertices: s.vertices ? s.vertices.map(v => [...v]) : undefined,
           capped: s.capped,
           wallThickness: s.wallThickness,
+          isMask: s.isMask,
         })),
         layers: sceneState.layers.map((l) => ({ ...l })),
         activeLayerId: sceneState.activeLayerId,

@@ -6,8 +6,11 @@ import {
   Trash2,
   AlignHorizontalSpaceAround,
   FlipHorizontal2,
+  EyeOff,
 } from "lucide-react";
 import {
+  sceneState,
+  pushUndo,
   duplicateSelectedShapes,
   deleteSelectedShapes,
   flipShapes,
@@ -40,6 +43,18 @@ export function buildObjectMenu(ids: string[]): ContextMenuItem[] {
       icon: Trash2,
       shortcut: "\u232B",
       action: () => deleteSelectedShapes(),
+    },
+    {
+      label: "Toggle Mask",
+      icon: EyeOff,
+      action: () => {
+        pushUndo();
+        for (const id of ids) {
+          const shape = sceneState.shapes.find((s) => s.id === id);
+          if (shape) shape.isMask = !shape.isMask;
+        }
+        sceneState.version++;
+      },
     },
     { separator: true },
     {

@@ -648,22 +648,45 @@ export class GPURenderer {
       layerOrder.set(layers[i].id, i);
     }
     const hiddenLayers = new Set<string>();
-    const layerInfo = new Map<string, { mode: TransferMode; opacity: number; param: number; fxParams: [number, number, number] }>();
+    const layerInfo = new Map<string, { mode: TransferMode; opacity: number; param: number; fxParams: [number, number, number]; maskEnabled?: boolean }>();
     for (const l of layers) {
-      layerInfo.set(l.id, { mode: l.transferMode as TransferMode, opacity: l.opacity, param: l.transferParam, fxParams: l.fxParams ?? [0, 0, 0] });
+      layerInfo.set(l.id, { mode: l.transferMode as TransferMode, opacity: l.opacity, param: l.transferParam, fxParams: l.fxParams ?? [0, 0, 0], maskEnabled: l.maskEnabled });
       if (!l.visible) hiddenLayers.add(l.id);
     }
 
     // If layer config changed, force full rebake (affects all shapes' packed transfer data)
-    const layerFp = layers.map(l => `${l.id},${l.transferMode},${l.opacity},${l.transferParam},${l.visible},${l.fx},${l.fxParams}`).join('|');
+    const maskEditId = sceneState.maskEditLayerId;
+    const layerFp = layers.map(l => `${l.id},${l.transferMode},${l.opacity},${l.transferParam},${l.visible},${l.fx},${l.fxParams},${l.maskEnabled}`).join('|') + (maskEditId ? `|ME:${maskEditId}` : '');
     if (layerFp !== this.lastLayerFingerprint) {
       this.lastLayerFingerprint = layerFp;
       this.chunkManager.markAllDirty();
     }
 
-    const sorted = [...shapes].filter((s) => !hiddenLayers.has(s.layerId)).sort((a, b) => {
-      return (layerOrder.get(a.layerId) ?? 0) - (layerOrder.get(b.layerId) ?? 0);
-    });
+    // Build set of layers that have mask shapes (for layer boundary marking)
+    const layersWithMask = new Set<string>();
+    for (const s of shapes) {
+      if (s.isMask) layersWithMask.add(s.layerId);
+    }
+
+    let sorted: SDFShape[];
+    if (maskEditId) {
+      // Mask edit mode: only show mask shapes on the edited layer
+      sorted = [...shapes].filter((s) => s.layerId === maskEditId && s.isMask).sort((a, b) => {
+        return (layerOrder.get(a.layerId) ?? 0) - (layerOrder.get(b.layerId) ?? 0);
+      });
+    } else {
+      sorted = [...shapes].filter((s) => {
+        if (hiddenLayers.has(s.layerId)) return false;
+        // Filter out mask shapes when mask is disabled on the layer
+        if (s.isMask) {
+          const li = layerInfo.get(s.layerId);
+          if (li && li.maskEnabled === false) return false;
+        }
+        return true;
+      }).sort((a, b) => {
+        return (layerOrder.get(a.layerId) ?? 0) - (layerOrder.get(b.layerId) ?? 0);
+      });
+    }
 
     const shapeCount = Math.min(sorted.length, MAX_SHAPES);
 
@@ -763,20 +786,34 @@ export class GPURenderer {
         const opacity = info?.opacity ?? 1;
         const param = info?.param ?? 0.5;
         // Pack: bits 0-7 = mode, bits 8-19 = opacity*4095, bits 20-31 = param*4095
+        // Mask shapes get mode=128; in mask edit mode, mask shapes get mode=0 (union) for visibility
+        let packedMode: number;
+        if (s.isMask) {
+          packedMode = maskEditId ? 0 : 128;
+        } else {
+          packedMode = TRANSFER_MODE_GPU[mode] & 0xFF;
+        }
         u32[off + 7] =
-          (TRANSFER_MODE_GPU[mode] & 0xFF) |
+          (packedMode & 0xFF) |
           ((Math.round(opacity * 4095) & 0xFFF) << 8) |
           ((Math.round(param * 4095) & 0xFFF) << 20);
         f32[off + 8] = s.rotation[0];
         f32[off + 9] = s.rotation[1];
         f32[off + 10] = s.rotation[2];
         f32[off + 11] = s.scale;
-        // fx_info: bits 0-7 = shape fx slot, bits 8-15 = layer fx slot (applied to all shapes in layer)
+        // fx_info: bits 0-7 = shape fx slot, bits 8-14 = layer fx slot, bit 15 = layer start,
+        // bit 16 = capped, bits 17-30 = wallThickness (14 bits), bit 31 = apply mask at layer boundary
         const sfxSlot = shapeIdToFxSlot.get(s.id) ?? 0;
-        const lfxSlot = layerIdToFxSlot.get(s.layerId) ?? 0;
+        const isLastInLayer = (i === layerLastShapeIdx.get(s.layerId));
+        const lfxSlot = isLastInLayer ? ((layerIdToFxSlot.get(s.layerId) ?? 0) & 0x7F) : 0;
         const cappedBit = (s.capped !== false ? 1 : 0) << 16;
-        const wallThick = Math.round(Math.max(0, Math.min(1, (s.wallThickness ?? 0.03) / 0.5)) * 32767) & 0x7FFF;
-        u32[off + 12] = (sfxSlot & 0xFF) | ((lfxSlot & 0xFF) << 8) | cappedBit | (wallThick << 17);
+        const wallThick = Math.round(Math.max(0, Math.min(1, (s.wallThickness ?? 0.03) / 0.5)) * 16383) & 0x3FFF;
+        // Set bit 31 on the last shape of a layer that has mask shapes (and not in mask edit mode)
+        const applyMaskBit = (!maskEditId && isLastInLayer && layersWithMask.has(s.layerId)) ? 0x80000000 : 0;
+        // Set bit 15 on the first shape of a layer that has masks (layer start marker for d_layer_start snapshot)
+        const isFirstInLayer = (i === layerFirstShapeIdx.get(s.layerId));
+        const layerStartBit = (!maskEditId && isFirstInLayer && layersWithMask.has(s.layerId)) ? (1 << 15) : 0;
+        u32[off + 12] = (((sfxSlot & 0xFF) | ((lfxSlot & 0xFF) << 8) | layerStartBit | cappedBit | (wallThick << 17)) | applyMaskBit) >>> 0;
         // Pack shape fx params (16-bit each)
         const sfp = s.fxParams ?? [0, 0, 0];
         const sp0 = Math.round(Math.max(0, Math.min(1, sfp[0])) * 65535);

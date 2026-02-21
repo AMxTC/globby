@@ -31,6 +31,9 @@ import {
   setLayerTransferParam,
   setActiveLayer,
   toggleLayerVisibility,
+  toggleLayerMask,
+  enterMaskEdit,
+  exitMaskEdit,
   reorderLayers,
   moveShapeToLayer,
   moveShape,
@@ -48,6 +51,7 @@ import { buildLayerMenu } from "./menus/layerMenu";
 import { FxEditor } from "./FxEditor";
 import type { Layer, Vec3 } from "../state/sceneStore";
 import type { TransferMode, ShapeType } from "../constants";
+import { MaskIcon } from "./icons/MaskIcon";
 
 const TRANSFER_MODES: { value: TransferMode; label: string }[] = [
   { value: "union", label: "Union" },
@@ -279,8 +283,7 @@ function initSectionHeights(
   collapsed: Record<SectionKey, boolean>,
 ): Record<SectionKey, number> {
   const expandedKeys = getExpandedKeys(collapsed);
-  if (expandedKeys.length === 0)
-    return { layers: 0, properties: 0 };
+  if (expandedKeys.length === 0) return { layers: 0, properties: 0 };
   const headerTotal = SECTION_KEYS.length * HEADER_HEIGHT;
   const dividerCount = Math.max(0, expandedKeys.length - 1);
   const available =
@@ -441,7 +444,7 @@ export default function SidePanel() {
   return (
     <div
       ref={containerRef}
-      className="fixed top-0 right-0 h-full w-56 bg-accent border-l border-border flex flex-col z-50 overflow-hidden"
+      className="fixed top-0 right-0 h-full w-60 bg-accent border-l border-border flex flex-col z-50 overflow-hidden"
     >
       {/* === Layers Section === */}
       <SectionHeader
@@ -544,6 +547,22 @@ export default function SidePanel() {
             </div>
           )}
 
+          {/* Mask edit banner */}
+          {snap.maskEditLayerId !== null && (
+            <div className="flex items-center gap-2 px-3 py-1.5 bg-primary/10 border-b border-primary/30 shrink-0">
+              <MaskIcon size={14} className="text-primary" />
+              <span className="text-[11px] text-primary font-medium flex-1">
+                Editing Mask
+              </span>
+              <button
+                className="text-[11px] text-primary hover:text-primary/80 underline"
+                onClick={() => exitMaskEdit()}
+              >
+                Exit (Esc)
+              </button>
+            </div>
+          )}
+
           {/* Layer list */}
           <div className="flex-1 overflow-y-auto overflow-x-hidden">
             <div className="p-2 space-y-0.5 flex flex-col gap-1">
@@ -632,6 +651,36 @@ export default function SidePanel() {
                       </span>
                     )}
 
+                    {snap.shapes.some(
+                      (s) => s.layerId === layer.id && s.isMask,
+                    ) && (
+                      <button
+                        className={cn(
+                          "p-0.5 rounded-sm shrink-0 transition-colors",
+                          snap.maskEditLayerId === layer.id
+                            ? "text-primary ring-2 ring-primary"
+                            : layer.maskEnabled !== false
+                              ? "text-muted-foreground hover:text-foreground"
+                              : "text-muted-foreground/40 hover:text-muted-foreground",
+                        )}
+                        title="Click: toggle mask, Alt+Click: edit mask"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (e.altKey) {
+                            if (snap.maskEditLayerId === layer.id) {
+                              exitMaskEdit();
+                            } else {
+                              enterMaskEdit(layer.id);
+                            }
+                          } else {
+                            toggleLayerMask(layer.id);
+                          }
+                        }}
+                      >
+                        <MaskIcon size={14} />
+                      </button>
+                    )}
+
                     <div className="flex items-center shrink-0">
                       <button
                         className="p-0.5 rounded-sm text-muted-foreground hover:text-foreground hover:bg-accent disabled:opacity-25 disabled:pointer-events-none transition-colors"
@@ -664,6 +713,27 @@ export default function SidePanel() {
 
           {/* Add / Delete layer buttons */}
           <div className="flex items-center gap-1 px-2 py-1.5 border-t border-border shrink-0 justify-end">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 text-muted-foreground hover:text-foreground"
+              disabled={snap.shapes.some(
+                (s) => s.layerId === snap.activeLayerId && s.isMask,
+              )}
+              onClick={() => {
+                const layer = sceneState.layers.find(
+                  (l) => l.id === sceneState.activeLayerId,
+                );
+                if (layer && layer.maskEnabled === undefined) {
+                  pushUndo();
+                  layer.maskEnabled = true;
+                }
+                enterMaskEdit(sceneState.activeLayerId);
+              }}
+              title="Add Mask"
+            >
+              <MaskIcon size={16} />
+            </Button>
             <Button
               variant="ghost"
               size="icon"

@@ -17,7 +17,8 @@ function generateShapeEval(shapeVar: string): string {
     let center_dist = length(to_shape);
     let bound_r = length(shapes[${shapeVar}].size) * shapes[${shapeVar}].scale;
     let lower_bound = center_dist - bound_r;
-    if (lower_bound > max(abs(d), 0.25)) { continue; }
+    let is_mask_shape = (shapes[${shapeVar}].transfer_packed & 0x80u) != 0u;
+    if (!is_mask_shape && lower_bound > max(abs(d), 0.25)) { continue; }
 
     let translated_p = to_shape;
     let inv_rot = buildInvRotation(shapes[${shapeVar}].rotation);
@@ -37,66 +38,13 @@ function generateShapeEval(shapeVar: string): string {
         if (is_capped == 1u) {
           d_shape = sdPolygonExtrusion(local_p, shapes[${shapeVar}].size.y, base_idx, count);
         } else {
-          let wall_t = f32((shapes[${shapeVar}].fx_info >> 17u) & 0x7FFFu) / 32767.0 * 0.5;
+          let wall_t = f32((shapes[${shapeVar}].fx_info >> 17u) & 0x3FFFu) / 16383.0 * 0.5;
           d_shape = sdPolygonExtrusionUncapped(local_p, shapes[${shapeVar}].size.y, base_idx, count, wall_t / s);
         }
       }
       default: { d_shape = 1e10; }
     }
     d_shape = d_shape * s;`;
-}
-
-function generateTransferBlock(shapeVar: string): string {
-  return `
-    // Track closest shape by raw SDF distance (for selection)
-    if (abs(d_shape) < closest_raw) {
-      closest_raw = abs(d_shape);
-      closest_id = ${shapeVar};
-    }
-
-    // Unpack: bits 0-7 = mode, bits 8-19 = opacity*4095, bits 20-31 = param*4095
-    let packed = shapes[${shapeVar}].transfer_packed;
-    let mode = packed & 0xFFu;
-    let opacity = f32((packed >> 8u) & 0xFFFu) / 4095.0;
-    let eff_opacity = opacity;
-    let param = f32((packed >> 20u) & 0xFFFu) / 4095.0;
-
-    // d_scaled lerps shape toward no-effect at low opacity
-    let d_scaled = mix(d, d_shape, eff_opacity);
-
-    switch mode {
-      // 0: union (hard min)
-      case 0u: { d = min(d, d_scaled); }
-      // 1: smooth union — param controls smoothness (0..0.5)
-      case 1u: { d = smin(d, d_scaled, param * 0.5); }
-      // 2: subtract
-      case 2u: { d = max(d, mix(d, -d_shape, eff_opacity)); }
-      // 3: intersect
-      case 3u: { d = max(d, d_scaled); }
-      // 4: addition (plain sum of SDFs)
-      case 4u: { d = mix(d, d + d_shape, eff_opacity); }
-      // 5: multiply
-      case 5u: { d = mix(d, d * d_shape, eff_opacity); }
-      // 6: pipe — param controls thickness (0..0.2)
-      case 6u: {
-        let thickness = param * 0.2;
-        let pipe_d = abs(max(d, d_shape)) - thickness;
-        d = mix(d, pipe_d, eff_opacity);
-      }
-      // 7: engrave — param controls depth (0..0.2)
-      case 7u: {
-        let depth = param * 0.2;
-        let engrave_d = max(d, -(abs(d_shape) - depth));
-        d = mix(d, engrave_d, eff_opacity);
-      }
-      // 8: smooth subtract — param controls smoothness (0..0.5)
-      case 8u: {
-        let k = param * 0.5;
-        let neg_d_shape = mix(d, -d_shape, eff_opacity);
-        d = -smin(-d, -neg_d_shape, k);
-      }
-      default: { d = min(d, d_scaled); }
-    }`;
 }
 
 /**
@@ -149,10 +97,18 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let world_pos = params.chunk_origin + (vec3<f32>(gid) - 0.5) * params.voxel_size;
 
   var d: f32 = 1e10;
+  var d_mask: f32 = 1e10;
+  var d_layer_start: f32 = 1e10;
   var closest_raw: f32 = 1e10;
   var closest_id: u32 = 0xFFFFFFFFu;`);
 
   mainLines.push(`  for (var i: u32 = 0u; i < params.shape_count; i = i + 1u) {`);
+
+  // Snapshot d at layer start (bit 15) so mask can't cut into layers below
+  mainLines.push(`    let is_layer_start = (shapes[i].fx_info >> 15u) & 1u;`);
+  mainLines.push(`    if (is_layer_start == 1u) {`);
+  mainLines.push(`      d_layer_start = d;`);
+  mainLines.push(`    }`);
 
   mainLines.push(generateShapeEval('i'));
 
@@ -167,21 +123,82 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     mainLines.push(`    }`);
   }
 
-  // Layer fx dispatch: apply to individual shapes (bits 8-15 contain layer fx slot for all shapes in layer)
+  // Mask routing: mode >= 128 routes to d_mask, else normal transfer
+  mainLines.push(`    let packed = shapes[i].transfer_packed;`);
+  mainLines.push(`    let mode = packed & 0xFFu;`);
+  mainLines.push(`    if (mode >= 128u) {`);
+  mainLines.push(`      d_mask = min(d_mask, d_shape);`);
+  mainLines.push(`    } else {`);
+
+  // Transfer: shapes combine with d using their transfer mode (indented inside else block)
+  mainLines.push(`    // Track closest shape by raw SDF distance (for selection)
+    if (abs(d_shape) < closest_raw) {
+      closest_raw = abs(d_shape);
+      closest_id = i;
+    }
+
+    let opacity = f32((packed >> 8u) & 0xFFFu) / 4095.0;
+    let eff_opacity = opacity;
+    let param = f32((packed >> 20u) & 0xFFFu) / 4095.0;
+
+    // d_scaled lerps shape toward no-effect at low opacity
+    let d_scaled = mix(d, d_shape, eff_opacity);
+
+    switch mode {
+      // 0: union (hard min)
+      case 0u: { d = min(d, d_scaled); }
+      // 1: smooth union — param controls smoothness (0..0.5)
+      case 1u: { d = smin(d, d_scaled, param * 0.5); }
+      // 2: subtract
+      case 2u: { d = max(d, mix(d, -d_shape, eff_opacity)); }
+      // 3: intersect
+      case 3u: { d = max(d, d_scaled); }
+      // 4: addition (plain sum of SDFs)
+      case 4u: { d = mix(d, d + d_shape, eff_opacity); }
+      // 5: multiply
+      case 5u: { d = mix(d, d * d_shape, eff_opacity); }
+      // 6: pipe — param controls thickness (0..0.2)
+      case 6u: {
+        let thickness = param * 0.2;
+        let pipe_d = abs(max(d, d_shape)) - thickness;
+        d = mix(d, pipe_d, eff_opacity);
+      }
+      // 7: engrave — param controls depth (0..0.2)
+      case 7u: {
+        let depth = param * 0.2;
+        let engrave_d = max(d, -(abs(d_shape) - depth));
+        d = mix(d, engrave_d, eff_opacity);
+      }
+      // 8: smooth subtract — param controls smoothness (0..0.5)
+      case 8u: {
+        let k = param * 0.5;
+        let neg_d_shape = mix(d, -d_shape, eff_opacity);
+        d = -smin(-d, -neg_d_shape, k);
+      }
+      default: { d = min(d, d_scaled); }
+    }`);
+  mainLines.push(`    }`); // end else
+
+  // Apply mask at layer boundary (bit 31 of fx_info), then layer fx on combined d
+  mainLines.push(`    let apply_mask = (shapes[i].fx_info >> 31u) & 1u;`);
+  mainLines.push(`    if (apply_mask == 1u && d_mask < 1e9) {`);
+  mainLines.push(`      d = min(max(d, -d_mask), d_layer_start);`);
+  mainLines.push(`      d_mask = 1e10;`);
+  mainLines.push(`      d_layer_start = 1e10;`);
+  mainLines.push(`    }`);
+
+  // Layer fx dispatch: apply to combined d at layer boundary (bits 8-15 of fx_info)
   if (hasLayerFx) {
-    mainLines.push(`    let lfx = (shapes[i].fx_info >> 8u) & 0xFFu;`);
+    mainLines.push(`    let lfx = (shapes[i].fx_info >> 8u) & 0x7Fu;`);
     mainLines.push(`    if (lfx != 0u) {`);
     mainLines.push(`      switch lfx {`);
     for (const { slot } of layerFxSlots) {
-      mainLines.push(`        case ${slot}u: { d_shape = layer_fx_${slot}(d_shape, world_pos, unpackLayerFxParams(shapes[i])); }`);
+      mainLines.push(`        case ${slot}u: { d = layer_fx_${slot}(d, world_pos, unpackLayerFxParams(shapes[i])); }`);
     }
     mainLines.push(`        default: {}`);
     mainLines.push(`      }`);
     mainLines.push(`    }`);
   }
-
-  // Transfer: shapes combine with d using their transfer mode
-  mainLines.push(generateTransferBlock('i'));
 
   mainLines.push(`  }
 

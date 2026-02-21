@@ -12,7 +12,7 @@ struct Shape {
   transfer_packed: u32, // bits 0-7=mode, 8-19=opacity*4095, 20-31=param*4095
   rotation: vec3<f32>,   // euler angles
   scale: f32,            // uniform scale
-  fx_info: u32,          // bits 0-7=shape_fx_slot, 8-15=layer_fx_slot (last shape in layer only)
+  fx_info: u32,          // bits 0-7=shape_fx_slot, 8-14=layer_fx_slot, 15=layer_start, 31=apply_mask
   fx_packed0: u32,  // shape_p0(lo16) | shape_p1(hi16)
   fx_packed1: u32,  // shape_p2(lo16) | layer_p0(hi16)
   fx_packed2: u32,  // layer_p1(lo16) | layer_p2(hi16)
@@ -190,16 +190,24 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let world_pos = params.chunk_origin + (vec3<f32>(gid) - 0.5) * params.voxel_size;
 
   var d: f32 = 1e10;
+  var d_mask: f32 = 1e10;
+  var d_layer_start: f32 = 1e10;
   var closest_raw: f32 = 1e10;
   var closest_id: u32 = 0xFFFFFFFFu;
   for (var i: u32 = 0u; i < params.shape_count; i = i + 1u) {
+    // Snapshot d at layer start (bit 15) so mask can't cut into layers below
+    let is_layer_start = (shapes[i].fx_info >> 15u) & 1u;
+    if (is_layer_start == 1u) {
+      d_layer_start = d;
+    }
     // Cheap bounding-sphere skip: if point is far from shape, skip expensive SDF eval
     let to_shape = world_pos - shapes[i].position;
     let center_dist = length(to_shape);
     let bound_r = length(shapes[i].size) * shapes[i].scale;
     let lower_bound = center_dist - bound_r;
-    // Skip if lower bound exceeds both current d and a margin for smooth ops
-    if (lower_bound > max(abs(d), 0.25)) { continue; }
+    // Mask shapes (mode bit 7) skip based on d_mask; normal shapes skip based on d
+    let is_mask_shape = (shapes[i].transfer_packed & 0x80u) != 0u;
+    if (!is_mask_shape && lower_bound > max(abs(d), 0.25)) { continue; }
 
     let translated_p = to_shape;
     let inv_rot = buildInvRotation(shapes[i].rotation);
@@ -219,7 +227,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         if (is_capped == 1u) {
           d_shape = sdPolygonExtrusion(local_p, shapes[i].size.y, base_idx, count);
         } else {
-          let wall_t = f32((shapes[i].fx_info >> 17u) & 0x7FFFu) / 32767.0 * 0.5;
+          let wall_t = f32((shapes[i].fx_info >> 17u) & 0x3FFFu) / 16383.0 * 0.5;
           d_shape = sdPolygonExtrusionUncapped(local_p, shapes[i].size.y, base_idx, count, wall_t / s);
         }
       }
@@ -239,41 +247,54 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let opacity = f32((packed >> 8u) & 0xFFFu) / 4095.0;
     let param = f32((packed >> 20u) & 0xFFFu) / 4095.0;
 
-    // d_scaled lerps shape toward no-effect at low opacity
-    let d_scaled = mix(d, d_shape, opacity);
+    if (mode >= 128u) {
+      // Mask shape: union into mask accumulator
+      d_mask = min(d_mask, d_shape);
+    } else {
+      // d_scaled lerps shape toward no-effect at low opacity
+      let d_scaled = mix(d, d_shape, opacity);
 
-    switch mode {
-      // 0: union (hard min)
-      case 0u: { d = min(d, d_scaled); }
-      // 1: smooth union — param controls smoothness (0..0.5)
-      case 1u: { d = smin(d, d_scaled, param * 0.5); }
-      // 2: subtract
-      case 2u: { d = max(d, mix(d, -d_shape, opacity)); }
-      // 3: intersect
-      case 3u: { d = max(d, d_scaled); }
-      // 4: addition (plain sum of SDFs)
-      case 4u: { d = mix(d, d + d_shape, opacity); }
-      // 5: multiply
-      case 5u: { d = mix(d, d * d_shape, opacity); }
-      // 6: pipe — param controls thickness (0..0.2)
-      case 6u: {
-        let thickness = param * 0.2;
-        let pipe_d = abs(max(d, d_shape)) - thickness;
-        d = mix(d, pipe_d, opacity);
+      switch mode {
+        // 0: union (hard min)
+        case 0u: { d = min(d, d_scaled); }
+        // 1: smooth union — param controls smoothness (0..0.5)
+        case 1u: { d = smin(d, d_scaled, param * 0.5); }
+        // 2: subtract
+        case 2u: { d = max(d, mix(d, -d_shape, opacity)); }
+        // 3: intersect
+        case 3u: { d = max(d, d_scaled); }
+        // 4: addition (plain sum of SDFs)
+        case 4u: { d = mix(d, d + d_shape, opacity); }
+        // 5: multiply
+        case 5u: { d = mix(d, d * d_shape, opacity); }
+        // 6: pipe — param controls thickness (0..0.2)
+        case 6u: {
+          let thickness = param * 0.2;
+          let pipe_d = abs(max(d, d_shape)) - thickness;
+          d = mix(d, pipe_d, opacity);
+        }
+        // 7: engrave — param controls depth (0..0.2)
+        case 7u: {
+          let depth = param * 0.2;
+          let engrave_d = max(d, -(abs(d_shape) - depth));
+          d = mix(d, engrave_d, opacity);
+        }
+        // 8: smooth subtract — param controls smoothness (0..0.5)
+        case 8u: {
+          let k = param * 0.5;
+          let neg_d_shape = mix(d, -d_shape, opacity);
+          d = -smin(-d, -neg_d_shape, k);
+        }
+        default: { d = min(d, d_scaled); }
       }
-      // 7: engrave — param controls depth (0..0.2)
-      case 7u: {
-        let depth = param * 0.2;
-        let engrave_d = max(d, -(abs(d_shape) - depth));
-        d = mix(d, engrave_d, opacity);
-      }
-      // 8: smooth subtract — param controls smoothness (0..0.5)
-      case 8u: {
-        let k = param * 0.5;
-        let neg_d_shape = mix(d, -d_shape, opacity);
-        d = -smin(-d, -neg_d_shape, k);
-      }
-      default: { d = min(d, d_scaled); }
+    }
+
+    // Apply mask at layer boundary (bit 31 of fx_info)
+    let apply_mask = (shapes[i].fx_info >> 31u) & 1u;
+    if (apply_mask == 1u && d_mask < 1e9) {
+      d = min(max(d, -d_mask), d_layer_start);
+      d_mask = 1e10;
+      d_layer_start = 1e10;
     }
   }
 
