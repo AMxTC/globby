@@ -362,9 +362,10 @@ fn fs(@builtin(position) frag_coord: vec4<f32>) -> FragOutput {
         let pixel_world = cam_dist * 2.0 / uniforms.resolution.y;
         let fw = vec2<f32>(pixel_world);
 
-        // Grid lines at 0.1 unit spacing
-        let grid_coord = abs(fract(vec2<f32>(gx * 10.0, gz * 10.0)) - 0.5);
-        let fw_grid = fw * 10.0;
+        let grid_spacing = 0.2; // world units between grid lines
+        let grid_freq = 1.0 / grid_spacing;
+        let grid_coord = abs(fract(vec2<f32>(gx * grid_freq, gz * grid_freq)) - 0.5);
+        let fw_grid = fw * grid_freq;
         let line = 1.0 - smoothstep(vec2<f32>(0.0), fw_grid * 1.5, grid_coord);
         let line_val = max(line.x, line.y);
 
